@@ -53,6 +53,11 @@ mod provides;
 mod requires;
 mod shareable_root_fields;
 mod subscriptions;
+mod root_field_variations;
+mod union_overlapping_field_names;
+mod extension_fields;
+mod relationship_subfields;
+mod missing_plan_tests;
 // TODO: port the rest of query-planner-js/src/__tests__/buildPlan.test.ts
 
 #[test]
