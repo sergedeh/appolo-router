@@ -31,12 +31,16 @@ fn some_name() {
 }
 */
 
+mod abstract_types;
 mod cancel;
+mod composite_fields;
 mod context;
 mod debug_max_evaluated_plans_configuration;
+mod deduplication;
 mod defer;
 mod disable_subgraphs;
 mod entities;
+mod extension_fields;
 mod fetch_operation_names;
 mod field_merging_with_skip_and_include;
 mod fragment_autogeneration;
@@ -48,16 +52,15 @@ mod introspection_typename_handling;
 mod merged_abstract_types_handling;
 mod mutations;
 mod named_fragments_expansion;
+mod overridden_fields;
 mod overrides;
 mod provides;
+mod relationship_subfields;
 mod requires;
+mod root_field_variations;
 mod shareable_root_fields;
 mod subscriptions;
-mod root_field_variations;
 mod union_overlapping_field_names;
-mod extension_fields;
-mod relationship_subfields;
-mod missing_plan_tests;
 // TODO: port the rest of query-planner-js/src/__tests__/buildPlan.test.ts
 
 #[test]

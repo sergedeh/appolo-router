@@ -1839,3 +1839,66 @@ fn handles_requires_from_supergraph() {
       "###
     );
 }
+#[test]
+fn field_requires_value_from_base_service() {
+    let planner = planner!(
+        product: r#"
+        type Query {
+            topCars: [Car!]
+        }
+
+        type Car @key(fields: "id") {
+            id: ID!
+            price: Int
+        }
+        "#,
+        reviews: r#"
+        type Car @key(fields: "id") {
+            id: ID!
+            price: Int @external
+            retailPrice: Int @requires(fields: "price")
+        }
+        "#,
+    );
+    assert_plan!(
+        &planner,
+        r#"
+          query {
+            topCars {
+              retailPrice
+            }
+          }
+        "#,
+        @r###"
+        QueryPlan {
+          Sequence {
+            Fetch(service: "product") {
+              {
+                topCars {
+                  __typename
+                  id
+                  price
+                }
+              }
+            },
+            Flatten(path: "topCars.@") {
+              Fetch(service: "reviews") {
+                {
+                  ... on Car {
+                    __typename
+                    id
+                    price
+                  }
+                } =>
+                {
+                  ... on Car {
+                    retailPrice
+                  }
+                }
+              },
+            },
+          },
+        }
+        "###
+    );
+}

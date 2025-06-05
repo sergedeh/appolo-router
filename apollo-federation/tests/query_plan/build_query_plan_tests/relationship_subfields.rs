@@ -269,3 +269,70 @@ fn relationship_subfields_with_provided_keys() {
         "###
     );
 }
+#[test]
+fn relationship_field_with_extension_subfields() {
+    let planner = planner!(
+        accounts: r#"
+        type User @key(fields: "id") {
+            id: ID!
+            birthDate: String
+        }
+        "#,
+        reviews: r#"
+        type Query {
+            topReviews: [Review]
+        }
+
+        type Review {
+            author: User
+        }
+
+        type User @key(fields: "id") {
+            id: ID!
+        }
+        "#,
+    );
+    assert_plan!(
+        &planner,
+        r#"
+          query {
+            topReviews {
+              author {
+                birthDate
+              }
+            }
+          }
+        "#,
+        @r###"
+        QueryPlan {
+          Sequence {
+            Fetch(service: "reviews") {
+              {
+                topReviews {
+                  author {
+                    __typename
+                    id
+                  }
+                }
+              }
+            },
+            Flatten(path: "topReviews.@.author") {
+              Fetch(service: "accounts") {
+                {
+                  ... on User {
+                    __typename
+                    id
+                  }
+                } =>
+                {
+                  ... on User {
+                    birthDate
+                  }
+                }
+              },
+            },
+          },
+        }
+        "###
+    );
+}
