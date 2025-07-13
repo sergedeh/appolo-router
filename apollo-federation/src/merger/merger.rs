@@ -633,8 +633,80 @@ impl Merger {
                 .any(|loc| loc.is_executable_location())
     }
 
-    fn merge_implements(&mut self, _type_def: &Name) {
-        todo!("Implement merging of 'implements' relationships")
+    fn merge_implements(&mut self, type_def: &Name) {
+        let Ok(dest_type) = self.merged.get_type(type_def.clone()) else {
+            return;
+        };
+
+        let (object_dest, interface_dest) = match dest_type {
+            TypeDefinitionPosition::Object(obj) => (Some(obj), None),
+            TypeDefinitionPosition::Interface(itf) => (None, Some(itf)),
+            _ => return,
+        };
+
+        let mut implemented: HashSet<Name> = HashSet::new();
+
+        for (idx, subgraph) in self.subgraphs.iter().enumerate() {
+            let Some(src_type) = subgraph.schema().try_get_type(type_def.clone()) else {
+                continue;
+            };
+
+            match src_type {
+                TypeDefinitionPosition::Object(obj) => {
+                    if interface_dest.is_some()
+                        && !subgraph.is_interface_object_type(&TypeDefinitionPosition::Object(obj.clone()))
+                    {
+                        continue;
+                    }
+                    if let Ok(obj_node) = obj.get(subgraph.schema().schema()) {
+                        let graph = match self.join_spec_name(idx) {
+                            Ok(n) => n.clone(),
+                            Err(_) => continue,
+                        };
+                        for itf in &obj_node.implements_interfaces {
+                            implemented.insert(itf.deref().clone());
+                            let directive = self.join_implements_directive(&graph, itf.deref());
+                            let dest = if let Some(dest) = &object_dest {
+                                CompositeTypeDefinitionPosition::Object(dest.clone())
+                            } else if let Some(dest) = &interface_dest {
+                                CompositeTypeDefinitionPosition::Interface(dest.clone())
+                            } else {
+                                continue;
+                            };
+                            let _ = dest.insert_directive(&mut self.merged, Node::new(directive).into());
+                        }
+                    }
+                }
+                TypeDefinitionPosition::Interface(itf) => {
+                    if object_dest.is_some() {
+                        continue;
+                    }
+                    if let Ok(itf_node) = itf.get(subgraph.schema().schema()) {
+                        let graph = match self.join_spec_name(idx) {
+                            Ok(n) => n.clone(),
+                            Err(_) => continue,
+                        };
+                        for itf_impl in &itf_node.implements_interfaces {
+                            implemented.insert(itf_impl.deref().clone());
+                            let directive = self.join_implements_directive(&graph, itf_impl.deref());
+                            let dest = CompositeTypeDefinitionPosition::Interface(interface_dest.as_ref().unwrap().clone());
+                            let _ = dest.insert_directive(&mut self.merged, Node::new(directive).into());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(dest) = object_dest {
+            for itf in implemented.iter() {
+                let _ = dest.insert_implements_interface(&mut self.merged, itf.clone().into());
+            }
+        } else if let Some(dest) = interface_dest {
+            for itf in implemented.iter() {
+                let _ = dest.insert_implements_interface(&mut self.merged, itf.clone().into());
+            }
+        }
     }
 
     fn merge_type_union(&mut self, _union_type: &Name) {
@@ -1008,6 +1080,22 @@ impl Merger {
             }));
         }
         join_field_directive
+    }
+
+    fn join_implements_directive(&self, graph: &Name, interface: &Name) -> Directive {
+        Directive {
+            name: name!("join__implements"),
+            arguments: vec![
+                Node::new(Argument {
+                    name: name!("graph"),
+                    value: Node::new(Value::Enum(graph.clone())),
+                }),
+                Node::new(Argument {
+                    name: name!("interface"),
+                    value: Node::new(Value::String(interface.to_string())),
+                }),
+            ],
+        }
     }
 
     fn add_join_field(
