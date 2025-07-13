@@ -5,3 +5,4 @@ mod hints;
 mod merge;
 mod merge_enum;
 mod merge_union;
+mod field_merge_context;

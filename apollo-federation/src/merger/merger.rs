@@ -11,6 +11,7 @@ use apollo_compiler::ast::DirectiveDefinition;
 use apollo_compiler::ast::Value;
 use apollo_compiler::collections::IndexMap;
 use apollo_compiler::schema::EnumValueDefinition;
+use apollo_compiler::schema::FieldDefinition;
 use apollo_compiler::validation::Valid;
 use itertools::Itertools;
 
@@ -36,6 +37,8 @@ use crate::schema::directive_location::DirectiveLocationExt;
 use crate::schema::position::DirectiveDefinitionPosition;
 use crate::schema::position::DirectiveTargetPosition;
 use crate::schema::position::InterfaceTypeDefinitionPosition;
+use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
+use crate::merger::field_merge_context::FieldMergeContext;
 use crate::schema::position::TypeDefinitionPosition;
 use crate::schema::referencer::DirectiveReferencers;
 use crate::schema::type_and_directive_specification::ArgumentMerger;
@@ -747,6 +750,83 @@ impl Merger {
 
     fn is_inaccessible_directive_in_supergraph(&self, _value: &EnumValueDefinition) -> bool {
         todo!("Implement is_inaccessible_directive_in_supergraph")
+    }
+
+    /// Add a `@join__field` directive for each source field present.
+    pub(crate) fn add_join_field(
+        &mut self,
+        sources: &Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+    ) -> Result<(), FederationError> {
+        let merge_context = FieldMergeContext::new(sources);
+        let mut iter = sources
+            .iter()
+            .filter_map(|(_, f)| f.as_ref().map(|field| &field.ty));
+        let all_types_equal = if let Some(first) = iter.next() {
+            iter.all(|ty| ty == first)
+        } else {
+            true
+        };
+
+        if !self.needs_join_field(sources, dest, all_types_equal, &merge_context) {
+            return Ok(());
+        }
+
+        for (&idx, source) in sources.iter() {
+            if source.is_some() {
+                let join_name = self.join_spec_name(idx)?;
+                let directive = self
+                    .join_spec_definition
+                    .field_directive(&self.merged, join_name)?;
+                dest.insert_directive(&mut self.merged, Node::new(directive))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Determine whether a `@join__field` directive is required for this field merge.
+    pub(crate) fn needs_join_field(
+        &self,
+        sources: &Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+        all_types_equal: bool,
+        merge_context: &FieldMergeContext,
+    ) -> bool {
+        if !all_types_equal {
+            return true;
+        }
+
+        if merge_context.some(|props, _| props.used_overridden || props.override_label.is_some()) {
+            return true;
+        }
+
+        let dest_coord = dest.coordinate();
+        if self
+            .fields_with_from_context
+            .object_or_interface_fields()
+            .any(|p| p.coordinate() == dest_coord)
+        {
+            return true;
+        }
+
+        for (&idx, source) in sources.iter() {
+            let overridden = merge_context.is_unused_overridden(idx);
+            if let Some(_field) = source {
+                if !overridden {
+                    // TODO: check for external/provides/requires once implemented
+                }
+            } else if let Some(subgraph) = self.subgraphs.get(idx) {
+                if subgraph
+                    .schema()
+                    .try_get_type(dest.type_name().clone())
+                    .is_some()
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     // TODO: These error reporting functions are not yet fully implemented

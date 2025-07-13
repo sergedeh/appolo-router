@@ -469,6 +469,27 @@ impl JoinSpecDefinition {
         })
     }
 
+    /// Create a `@join__field` directive application for the given subgraph.
+    pub(crate) fn field_directive(
+        &self,
+        schema: &FederationSchema,
+        subgraph_name: &Name,
+    ) -> Result<Directive, FederationError> {
+        let name_in_schema = self
+            .directive_name_in_schema(schema, &JOIN_FIELD_DIRECTIVE_NAME_IN_SPEC)?
+            .ok_or_else(|| SingleFederationError::Internal {
+                message: "Unexpectedly could not find join field directive in schema".to_owned(),
+            })?;
+
+        Ok(Directive {
+            name: name_in_schema,
+            arguments: vec![Node::new(Argument {
+                name: JOIN_GRAPH_ARGUMENT_NAME,
+                value: Node::new(Value::Enum(subgraph_name.clone())),
+            })],
+        })
+    }
+
     /// @join__graph
     fn graph_directive_specification(&self) -> DirectiveSpecification {
         DirectiveSpecification::new(
