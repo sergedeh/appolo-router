@@ -44,6 +44,46 @@ use crate::ValidFederationSubgraphs;
 use crate::error::FederationError;
 use crate::link::LinksMetadata;
 use crate::link::federation_spec_definition::FEDERATION_EXTERNAL_DIRECTIVE_NAME_IN_SPEC;
+
+#[derive(Default, Clone)]
+struct FieldMergeContextProperties {
+    used_overridden: bool,
+    unused_overridden: bool,
+    override_label: Option<String>,
+}
+
+#[derive(Default)]
+struct FieldMergeContext {
+    props: HashMap<usize, FieldMergeContextProperties>,
+}
+
+impl FieldMergeContext {
+    fn new<T>(sources: &IndexMap<usize, Option<T>>) -> Self {
+        let props = sources
+            .keys()
+            .map(|i| (*i, FieldMergeContextProperties::default()))
+            .collect();
+        Self { props }
+    }
+
+    fn is_unused_overridden(&self, idx: usize) -> bool {
+        self.props
+            .get(&idx)
+            .map(|p| p.unused_overridden)
+            .unwrap_or(false)
+    }
+
+    fn is_used_overridden(&self, idx: usize) -> bool {
+        self.props
+            .get(&idx)
+            .map(|p| p.used_overridden)
+            .unwrap_or(false)
+    }
+
+    fn override_label(&self, idx: usize) -> Option<&str> {
+        self.props.get(&idx).and_then(|p| p.override_label.as_deref())
+    }
+}
 use crate::link::federation_spec_definition::FEDERATION_FIELDS_ARGUMENT_NAME;
 use crate::link::federation_spec_definition::FEDERATION_FROM_ARGUMENT_NAME;
 use crate::link::federation_spec_definition::FEDERATION_INTERFACEOBJECT_DIRECTIVE_NAME_IN_SPEC;
@@ -547,36 +587,12 @@ impl Merger {
                     }
                 };
 
-                fields::merge_arguments(
-                    field.arguments.iter(),
-                    &mut supergraph_field.make_mut().arguments,
-                    self,
+                self.merge_field(
+                    &mut supergraph_field.make_mut(),
+                    field,
                     directive_names,
-                );
-                self.merge_descriptions(
-                    &mut supergraph_field.make_mut().description,
-                    &field.description,
-                );
-
-                self.add_inaccessible(
-                    directive_names,
-                    &mut supergraph_field.make_mut().directives,
-                    &field.directives,
-                );
-
-                let join_field_directive = join_field_applied_directive(
                     subgraph_name,
-                    None,
-                    None,
-                    false,
-                    None,
-                    Some(&field.ty),
                 );
-
-                supergraph_field
-                    .make_mut()
-                    .directives
-                    .push(Node::new(join_field_directive));
             }
         } else {
             // TODO conflict on type
@@ -662,49 +678,12 @@ impl Merger {
                     directive_names,
                 );
 
-                let requires_directive_option = field
-                    .directives
-                    .get_all(&directive_names.requires)
-                    .next()
-                    .and_then(|p| directive_string_arg_value(p, &FEDERATION_FIELDS_ARGUMENT_NAME));
-
-                let provides_directive_option = field
-                    .directives
-                    .get_all(&directive_names.provides)
-                    .next()
-                    .and_then(|p| directive_string_arg_value(p, &FEDERATION_FIELDS_ARGUMENT_NAME));
-
-                let overrides_directive_option = field
-                    .directives
-                    .get_all(&directive_names.r#override)
-                    .next()
-                    .and_then(|p| {
-                        let overrides_from =
-                            directive_string_arg_value(p, &FEDERATION_FROM_ARGUMENT_NAME);
-                        let overrides_label =
-                            directive_string_arg_value(p, &FEDERATION_OVERRIDE_LABEL_ARGUMENT_NAME);
-                        overrides_from.map(|from| (from, overrides_label))
-                    });
-
-                let external_field = field
-                    .directives
-                    .get_all(&directive_names.external)
-                    .next()
-                    .is_some();
-
-                let join_field_directive = join_field_applied_directive(
+                self.merge_field(
+                    &mut supergraph_field.make_mut(),
+                    field,
+                    directive_names,
                     subgraph_name,
-                    requires_directive_option,
-                    provides_directive_option,
-                    external_field,
-                    overrides_directive_option,
-                    Some(&field.ty),
                 );
-
-                supergraph_field
-                    .make_mut()
-                    .directives
-                    .push(Node::new(join_field_directive));
 
                 // TODO: implement needsJoinField to avoid adding join__field when unnecessary
                 // https://github.com/apollographql/federation/blob/0d8a88585d901dff6844fdce1146a4539dec48df/composition-js/src/merging/merge.ts#L1648
@@ -880,6 +859,86 @@ impl Merger {
         } else {
             // conflict?
         }
+    }
+
+    fn needs_join_field(&self) -> bool {
+        true
+    }
+
+    fn add_join_field(
+        &self,
+        field_def: &mut FieldDefinition,
+        field: &FieldDefinition,
+        directive_names: &DirectiveNames,
+        subgraph_name: &EnumValue,
+    ) {
+        if !self.needs_join_field() {
+            return;
+        }
+
+        let requires_directive_option = field
+            .directives
+            .get_all(&directive_names.requires)
+            .next()
+            .and_then(|p| directive_string_arg_value(p, &FEDERATION_FIELDS_ARGUMENT_NAME));
+
+        let provides_directive_option = field
+            .directives
+            .get_all(&directive_names.provides)
+            .next()
+            .and_then(|p| directive_string_arg_value(p, &FEDERATION_FIELDS_ARGUMENT_NAME));
+
+        let overrides_directive_option = field
+            .directives
+            .get_all(&directive_names.r#override)
+            .next()
+            .and_then(|p| {
+                let overrides_from =
+                    directive_string_arg_value(p, &FEDERATION_FROM_ARGUMENT_NAME);
+                let overrides_label =
+                    directive_string_arg_value(p, &FEDERATION_OVERRIDE_LABEL_ARGUMENT_NAME);
+                overrides_from.map(|from| (from, overrides_label))
+            });
+
+        let external_field = field
+            .directives
+            .get_all(&directive_names.external)
+            .next()
+            .is_some();
+
+        let join_field_directive = join_field_applied_directive(
+            subgraph_name,
+            requires_directive_option,
+            provides_directive_option,
+            external_field,
+            overrides_directive_option,
+            Some(&field.ty),
+        );
+
+        field_def.directives.push(Node::new(join_field_directive));
+    }
+
+    fn merge_field(
+        &mut self,
+        supergraph_field: &mut FieldDefinition,
+        field: &FieldDefinition,
+        directive_names: &DirectiveNames,
+        subgraph_name: &EnumValue,
+    ) {
+        fields::merge_arguments(
+            field.arguments.iter(),
+            &mut supergraph_field.arguments,
+            self,
+            directive_names,
+        );
+        self.merge_descriptions(&mut supergraph_field.description, &field.description);
+        self.add_inaccessible(
+            directive_names,
+            &mut supergraph_field.directives,
+            &field.directives,
+        );
+
+        self.add_join_field(supergraph_field, field, directive_names, subgraph_name);
     }
 
     // generic so it handles ast::DirectiveList and schema::DirectiveList
