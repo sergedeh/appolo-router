@@ -88,3 +88,35 @@ impl FieldMergeContext {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_field_merge_context_properties() {
+        // Set up sources for 2 subgraphs
+        let sources: Sources<()> = [(0, Some(())), (1, None)].into_iter().collect();
+
+        let mut ctx = FieldMergeContext::new(&sources);
+        // Defaults
+        assert!(!ctx.is_used_overridden(0));
+        assert!(!ctx.is_unused_overridden(1));
+        assert!(ctx.override_label(1).is_none());
+
+        // Update properties
+        ctx.set_used_overridden(0);
+        ctx.set_unused_overridden(1);
+        ctx.set_override_with_unknown_target(1);
+        ctx.set_override_label(1, "label".to_string());
+
+        // Verify getters
+        assert!(ctx.is_used_overridden(0));
+        assert!(ctx.is_unused_overridden(1));
+        assert!(ctx.has_override_with_unknown_target(1));
+        assert_eq!(ctx.override_label(1), Some("label"));
+
+        // Predicate query
+        assert!(ctx.some(|p, idx| idx == 0 && p.used_overridden));
+    }
+}
+
