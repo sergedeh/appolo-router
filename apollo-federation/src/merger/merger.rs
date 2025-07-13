@@ -38,6 +38,7 @@ use crate::schema::position::DirectiveDefinitionPosition;
 use crate::schema::position::DirectiveTargetPosition;
 use crate::schema::position::InterfaceTypeDefinitionPosition;
 use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
+use crate::schema::position::FieldDefinitionPosition;
 use crate::merger::field_merge_context::FieldMergeContext;
 use crate::schema::position::TypeDefinitionPosition;
 use crate::schema::referencer::DirectiveReferencers;
@@ -800,6 +801,36 @@ impl Merger {
             return true;
         }
 
+        // Check if any source field has federation directives that require a
+        // join directive (@external, @requires, @provides).
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if !merge_context.is_unused_overridden(idx) {
+                    if let Some(subgraph) = self.subgraphs.get(idx) {
+                        let field_pos: FieldDefinitionPosition = dest.clone().into();
+                        let schema = subgraph.schema();
+                        let metadata = subgraph.metadata();
+
+                        if metadata.is_field_external(&field_pos) {
+                            return true;
+                        }
+
+                        if let Ok(Some(provides_name)) = subgraph.provides_directive_name() {
+                            if field_pos.has_applied_directive(schema, &provides_name) {
+                                return true;
+                            }
+                        }
+
+                        if let Ok(Some(requires_name)) = subgraph.requires_directive_name() {
+                            if field_pos.has_applied_directive(schema, &requires_name) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let dest_coord = dest.coordinate();
         if self
             .fields_with_from_context
@@ -813,7 +844,7 @@ impl Merger {
             let overridden = merge_context.is_unused_overridden(idx);
             if let Some(_field) = source {
                 if !overridden {
-                    // TODO: check for external/provides/requires once implemented
+                    // All checks handled above
                 }
             } else if let Some(subgraph) = self.subgraphs.get(idx) {
                 if subgraph
