@@ -49,6 +49,7 @@ use crate::link::federation_spec_definition::FEDERATION_EXTERNAL_DIRECTIVE_NAME_
 struct FieldMergeContextProperties {
     used_overridden: bool,
     unused_overridden: bool,
+    override_with_unknown_target: bool,
     override_label: Option<String>,
 }
 
@@ -80,8 +81,43 @@ impl FieldMergeContext {
             .unwrap_or(false)
     }
 
+    fn has_override_with_unknown_target(&self, idx: usize) -> bool {
+        self.props
+            .get(&idx)
+            .map(|p| p.override_with_unknown_target)
+            .unwrap_or(false)
+    }
+
     fn override_label(&self, idx: usize) -> Option<&str> {
         self.props.get(&idx).and_then(|p| p.override_label.as_deref())
+    }
+
+    fn set_used_overridden(&mut self, idx: usize) {
+        if let Some(p) = self.props.get_mut(&idx) {
+            p.used_overridden = true;
+        }
+    }
+
+    fn set_unused_overridden(&mut self, idx: usize) {
+        if let Some(p) = self.props.get_mut(&idx) {
+            p.unused_overridden = true;
+        }
+    }
+
+    fn set_override_with_unknown_target(&mut self, idx: usize) {
+        if let Some(p) = self.props.get_mut(&idx) {
+            p.override_with_unknown_target = true;
+        }
+    }
+
+    fn set_override_label(&mut self, idx: usize, label: String) {
+        if let Some(p) = self.props.get_mut(&idx) {
+            p.override_label = Some(label);
+        }
+    }
+
+    fn some<F: Fn(&FieldMergeContextProperties, usize) -> bool>(&self, f: F) -> bool {
+        self.props.iter().any(|(i, p)| f(p, *i))
     }
 }
 use crate::link::federation_spec_definition::FEDERATION_FIELDS_ARGUMENT_NAME;
@@ -861,8 +897,32 @@ impl Merger {
         }
     }
 
-    fn needs_join_field(&self) -> bool {
-        true
+    fn needs_join_field(&self, field: &FieldDefinition, directive_names: &DirectiveNames) -> bool {
+        if field
+            .directives
+            .get_all(&directive_names.requires)
+            .next()
+            .is_some()
+        {
+            return true;
+        }
+        if field
+            .directives
+            .get_all(&directive_names.provides)
+            .next()
+            .is_some()
+        {
+            return true;
+        }
+        if field
+            .directives
+            .get_all(&directive_names.external)
+            .next()
+            .is_some()
+        {
+            return true;
+        }
+        false
     }
 
     fn add_join_field(
@@ -872,7 +932,7 @@ impl Merger {
         directive_names: &DirectiveNames,
         subgraph_name: &EnumValue,
     ) {
-        if !self.needs_join_field() {
+        if !self.needs_join_field(field, directive_names) {
             return;
         }
 
@@ -939,6 +999,36 @@ impl Merger {
         );
 
         self.add_join_field(supergraph_field, field, directive_names, subgraph_name);
+    }
+
+    fn fields_in_source_if_abstracted_by_interface_object<'a>(
+        &self,
+        supergraph: &Schema,
+        subgraph_schema: &'a Schema,
+        parent_obj: &ObjectType,
+        field_name: &Name,
+    ) -> Vec<&'a FieldDefinition> {
+        if subgraph_schema.get_object(parent_obj.name.as_str()).is_some() {
+            return Vec::new();
+        }
+
+        parent_obj
+            .implements_interfaces
+            .iter()
+            .filter_map(|itf_name| {
+                let interface_ty = match supergraph.get_interface(itf_name.as_str()) {
+                    Some(i) => i,
+                    None => return None,
+                };
+                if !interface_ty.fields.contains_key(field_name) {
+                    return None;
+                }
+                match subgraph_schema.get_object(itf_name.as_str()) {
+                    Some(obj) => obj.fields.get(field_name).map(|f| f.as_ref()),
+                    None => None,
+                }
+            })
+            .collect()
     }
 
     // generic so it handles ast::DirectiveList and schema::DirectiveList
