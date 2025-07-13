@@ -660,7 +660,7 @@ pub(crate) mod tests {
             .insert(field_pos.clone());
 
         merger
-            .add_join_field(&sources, &field_pos.clone().into())
+            .merge_object_field(sources, &field_pos)
             .expect("directive added");
 
         let directives = field_pos

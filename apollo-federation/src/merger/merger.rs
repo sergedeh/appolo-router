@@ -46,6 +46,7 @@ use crate::schema::directive_location::DirectiveLocationExt;
 use crate::schema::position::DirectiveDefinitionPosition;
 use crate::schema::position::DirectiveTargetPosition;
 use crate::schema::position::FieldDefinitionPosition;
+use crate::schema::position::ObjectFieldDefinitionPosition;
 use crate::schema::position::InterfaceTypeDefinitionPosition;
 use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
 use crate::schema::position::TypeDefinitionPosition;
@@ -909,6 +910,17 @@ impl Merger {
         Ok(())
     }
 
+    /// Merge an object field and attach `@join__field` directives.
+    pub(crate) fn merge_object_field(
+        &mut self,
+        sources: Sources<Node<FieldDefinition>>,
+        dest: &ObjectFieldDefinitionPosition,
+    ) -> Result<(), FederationError> {
+        // In the future this will merge descriptions, arguments and types.
+        // For now we only attach join directives for the given sources.
+        self.add_join_field(&sources, &dest.clone().into())
+    }
+
     /// Determine whether a `@join__field` directive is required for this field merge.
     pub(crate) fn needs_join_field(
         &self,
@@ -929,11 +941,10 @@ impl Merger {
         // join directive (@external, @requires, @provides).
         for (&idx, source) in sources.iter() {
             if let Some(field) = source {
-                if !merge_context.is_unused_overridden(idx) {
-                    if let Some(subgraph) = self.subgraphs.get(idx) {
-                        let field_pos: FieldDefinitionPosition = dest.clone().into();
-                        let schema = subgraph.schema();
-                        let metadata = subgraph.metadata();
+                if let Some(subgraph) = self.subgraphs.get(idx) {
+                    let field_pos: FieldDefinitionPosition = dest.clone().into();
+                    let schema = subgraph.schema();
+                    let metadata = subgraph.metadata();
 
                         if metadata.is_field_external(&field_pos) {
                             return true;
@@ -950,7 +961,6 @@ impl Merger {
                                 return true;
                             }
                         }
-                    }
                 }
             }
         }
@@ -965,18 +975,15 @@ impl Merger {
         }
 
         for (&idx, source) in sources.iter() {
-            let overridden = merge_context.is_unused_overridden(idx);
-            if let Some(_field) = source {
-                if !overridden {
-                    // All checks handled above
-                }
-            } else if let Some(subgraph) = self.subgraphs.get(idx) {
-                if subgraph
-                    .schema()
-                    .try_get_type(dest.type_name().clone())
-                    .is_some()
-                {
-                    return true;
+            if source.is_none() {
+                if let Some(subgraph) = self.subgraphs.get(idx) {
+                    if subgraph
+                        .schema()
+                        .try_get_type(dest.type_name().clone())
+                        .is_some()
+                    {
+                        return true;
+                    }
                 }
             }
         }
