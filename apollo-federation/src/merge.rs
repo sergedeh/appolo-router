@@ -45,81 +45,6 @@ use crate::error::FederationError;
 use crate::link::LinksMetadata;
 use crate::link::federation_spec_definition::FEDERATION_EXTERNAL_DIRECTIVE_NAME_IN_SPEC;
 
-#[derive(Default, Clone)]
-struct FieldMergeContextProperties {
-    used_overridden: bool,
-    unused_overridden: bool,
-    override_with_unknown_target: bool,
-    override_label: Option<String>,
-}
-
-#[derive(Default)]
-struct FieldMergeContext {
-    props: HashMap<usize, FieldMergeContextProperties>,
-}
-
-impl FieldMergeContext {
-    fn new<T>(sources: &IndexMap<usize, Option<T>>) -> Self {
-        let props = sources
-            .keys()
-            .map(|i| (*i, FieldMergeContextProperties::default()))
-            .collect();
-        Self { props }
-    }
-
-    fn is_unused_overridden(&self, idx: usize) -> bool {
-        self.props
-            .get(&idx)
-            .map(|p| p.unused_overridden)
-            .unwrap_or(false)
-    }
-
-    fn is_used_overridden(&self, idx: usize) -> bool {
-        self.props
-            .get(&idx)
-            .map(|p| p.used_overridden)
-            .unwrap_or(false)
-    }
-
-    fn has_override_with_unknown_target(&self, idx: usize) -> bool {
-        self.props
-            .get(&idx)
-            .map(|p| p.override_with_unknown_target)
-            .unwrap_or(false)
-    }
-
-    fn override_label(&self, idx: usize) -> Option<&str> {
-        self.props.get(&idx).and_then(|p| p.override_label.as_deref())
-    }
-
-    fn set_used_overridden(&mut self, idx: usize) {
-        if let Some(p) = self.props.get_mut(&idx) {
-            p.used_overridden = true;
-        }
-    }
-
-    fn set_unused_overridden(&mut self, idx: usize) {
-        if let Some(p) = self.props.get_mut(&idx) {
-            p.unused_overridden = true;
-        }
-    }
-
-    fn set_override_with_unknown_target(&mut self, idx: usize) {
-        if let Some(p) = self.props.get_mut(&idx) {
-            p.override_with_unknown_target = true;
-        }
-    }
-
-    fn set_override_label(&mut self, idx: usize, label: String) {
-        if let Some(p) = self.props.get_mut(&idx) {
-            p.override_label = Some(label);
-        }
-    }
-
-    fn some<F: Fn(&FieldMergeContextProperties, usize) -> bool>(&self, f: F) -> bool {
-        self.props.iter().any(|(i, p)| f(p, *i))
-    }
-}
 use crate::link::federation_spec_definition::FEDERATION_FIELDS_ARGUMENT_NAME;
 use crate::link::federation_spec_definition::FEDERATION_FROM_ARGUMENT_NAME;
 use crate::link::federation_spec_definition::FEDERATION_INTERFACEOBJECT_DIRECTIVE_NAME_IN_SPEC;
@@ -999,36 +924,6 @@ impl Merger {
         );
 
         self.add_join_field(supergraph_field, field, directive_names, subgraph_name);
-    }
-
-    fn fields_in_source_if_abstracted_by_interface_object<'a>(
-        &self,
-        supergraph: &Schema,
-        subgraph_schema: &'a Schema,
-        parent_obj: &ObjectType,
-        field_name: &Name,
-    ) -> Vec<&'a FieldDefinition> {
-        if subgraph_schema.get_object(parent_obj.name.as_str()).is_some() {
-            return Vec::new();
-        }
-
-        parent_obj
-            .implements_interfaces
-            .iter()
-            .filter_map(|itf_name| {
-                let interface_ty = match supergraph.get_interface(itf_name.as_str()) {
-                    Some(i) => i,
-                    None => return None,
-                };
-                if !interface_ty.fields.contains_key(field_name) {
-                    return None;
-                }
-                match subgraph_schema.get_object(itf_name.as_str()) {
-                    Some(obj) => obj.fields.get(field_name).map(|f| f.as_ref()),
-                    None => None,
-                }
-            })
-            .collect()
     }
 
     // generic so it handles ast::DirectiveList and schema::DirectiveList
