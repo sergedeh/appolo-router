@@ -609,9 +609,9 @@ pub(crate) mod tests {
 
     #[test]
     fn test_add_join_field() {
-        use apollo_compiler::schema::{FieldDefinition, ObjectType, Type};
-        use crate::schema::position::ObjectTypeDefinitionPosition;
         use crate::schema::position::ObjectFieldDefinitionPosition;
+        use crate::schema::position::ObjectTypeDefinitionPosition;
+        use apollo_compiler::schema::{FieldDefinition, ObjectType, Type};
 
         let mut merger = create_test_merger().expect("valid Merger object");
 
@@ -663,10 +663,8 @@ pub(crate) mod tests {
             .add_join_field(&sources, &field_pos.clone().into())
             .expect("directive added");
 
-        let directives = field_pos.get_applied_directives(
-            &merger.merged,
-            &Name::new("join__field").expect("name"),
-        );
+        let directives = field_pos
+            .get_applied_directives(&merger.merged, &Name::new("join__field").expect("name"));
         assert_eq!(directives.len(), 2);
     }
 }

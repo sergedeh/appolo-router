@@ -33,7 +33,10 @@ impl FieldMergeContext {
     }
 
     pub(crate) fn is_used_overridden(&self, idx: usize) -> bool {
-        self.props.get(&idx).map(|p| p.used_overridden).unwrap_or(false)
+        self.props
+            .get(&idx)
+            .map(|p| p.used_overridden)
+            .unwrap_or(false)
     }
 
     pub(crate) fn is_unused_overridden(&self, idx: usize) -> bool {
@@ -51,7 +54,9 @@ impl FieldMergeContext {
     }
 
     pub(crate) fn override_label(&self, idx: usize) -> Option<&str> {
-        self.props.get(&idx).and_then(|p| p.override_label.as_deref())
+        self.props
+            .get(&idx)
+            .and_then(|p| p.override_label.as_deref())
     }
 
     pub(crate) fn set_used_overridden(&mut self, idx: usize) {
@@ -82,9 +87,7 @@ impl FieldMergeContext {
     where
         F: FnMut(&FieldMergeContextProperties, usize) -> bool,
     {
-        self.props
-            .iter()
-            .any(|(&idx, props)| predicate(props, idx))
+        self.props.iter().any(|(&idx, props)| predicate(props, idx))
     }
 }
 
@@ -119,4 +122,3 @@ mod tests {
         assert!(ctx.some(|p, idx| idx == 0 && p.used_overridden));
     }
 }
-
