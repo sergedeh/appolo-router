@@ -12,7 +12,7 @@ use apollo_compiler::ast::DirectiveDefinition;
 use apollo_compiler::ast::Type;
 use apollo_compiler::ast::Value;
 use apollo_compiler::name;
-use apollo_compiler::collections::IndexMap;
+use apollo_compiler::collections::{IndexMap, IndexSet};
 use apollo_compiler::schema::EnumValueDefinition;
 use apollo_compiler::validation::Valid;
 use itertools::Itertools;
@@ -41,6 +41,7 @@ use crate::schema::position::DirectiveTargetPosition;
 use crate::schema::position::CompositeTypeDefinitionPosition;
 use crate::schema::position::FieldDefinitionPosition;
 use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
+use crate::schema::position::ObjectTypeDefinitionPosition;
 use crate::schema::position::InterfaceTypeDefinitionPosition;
 use crate::schema::position::TypeDefinitionPosition;
 use crate::schema::referencer::DirectiveReferencers;
@@ -1101,11 +1102,95 @@ impl Merger {
         dest: &FieldDefinitionPosition,
         merge_context: FieldMergeContext,
     ) {
-        // For now, we only add join field annotations. Computing whether all
-        // field types are equal would require more context, so we optimistically
-        // assume they are.
+        let mut every_external = true;
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if !self.is_external(idx, field) {
+                    every_external = false;
+                    break;
+                }
+            } else {
+                let itf_fields =
+                    self.fields_in_source_if_abstracted_by_interface_object(dest, idx);
+                if itf_fields.is_empty() || !itf_fields.iter().all(|f| self.is_external(idx, f))
+                {
+                    every_external = false;
+                    break;
+                }
+            }
+        }
+
+        if every_external {
+            let mut subgraphs = Vec::new();
+            for (&idx, source) in sources.iter() {
+                if source.is_some()
+                    || !self
+                        .fields_in_source_if_abstracted_by_interface_object(dest, idx)
+                        .is_empty()
+                {
+                    subgraphs.push(self.names[idx].clone());
+                }
+            }
+
+            self.error_reporter.add_error(CompositionError::TypeDefinitionInvalid {
+                message: format!(
+                    "Field \"{}\" is marked @external on all the subgraphs in which it is listed ({})",
+                    ObjectOrInterfaceFieldDefinitionPosition::try_from(dest.clone())
+                        .map(|p| p.coordinate())
+                        .unwrap_or_else(|_| dest.field_name().to_string()),
+                    human_readable_subgraph_names(subgraphs.iter())
+                ),
+            });
+            return;
+        }
+
+        // TODO: merge types, arguments, directives, etc.
         let all_types_equal = true;
         self.add_join_field(sources, dest, all_types_equal, &merge_context);
+    }
+
+    fn merge_object_type(
+        &mut self,
+        sources: &Sources<ObjectTypeDefinitionPosition>,
+        dest: &ObjectTypeDefinitionPosition,
+    ) {
+        let Ok(dest_node) = dest.get(self.merged.schema()) else {
+            return;
+        };
+
+        let mut field_names: IndexSet<Name> = dest_node
+            .fields
+            .keys()
+            .cloned()
+            .collect();
+
+        for (&idx, source_obj) in sources.iter() {
+            if let Some(obj_pos) = source_obj {
+                if let Ok(obj_node) = obj_pos.get(self.subgraphs[idx].schema().schema()) {
+                    field_names.extend(obj_node.fields.keys().cloned());
+                }
+            }
+        }
+
+        for field_name in field_names {
+            let dest_field = dest.field(field_name.clone());
+            let mut field_sources: Sources<FieldDefinitionPosition> = Default::default();
+            for (&idx, source_obj) in sources.iter() {
+                let field_pos = source_obj.as_ref().and_then(|obj_pos| {
+                    let schema = self.subgraphs[idx].schema();
+                    let pos = obj_pos.field(field_name.clone());
+                    if pos.try_get(schema.schema()).is_some() {
+                        Some(FieldDefinitionPosition::from(pos))
+                    } else {
+                        None
+                    }
+                });
+                field_sources.insert(idx, field_pos);
+            }
+
+            let context = FieldMergeContext::new(&field_sources);
+            self.merge_field(&field_sources, &FieldDefinitionPosition::from(dest_field.clone()), context);
+        }
     }
 
     fn directive_arg_value<'a>(directive: &'a Directive, arg_name: &Name) -> Option<&'a Value> {
