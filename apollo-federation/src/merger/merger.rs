@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::LazyLock;
 use std::ops::Deref;
+use std::sync::LazyLock;
 
 use apollo_compiler::Name;
 use apollo_compiler::Node;
@@ -11,8 +11,8 @@ use apollo_compiler::ast::Directive;
 use apollo_compiler::ast::DirectiveDefinition;
 use apollo_compiler::ast::Type;
 use apollo_compiler::ast::Value;
-use apollo_compiler::name;
 use apollo_compiler::collections::{IndexMap, IndexSet};
+use apollo_compiler::name;
 use apollo_compiler::schema::EnumValueDefinition;
 use apollo_compiler::validation::Valid;
 use itertools::Itertools;
@@ -36,13 +36,13 @@ use crate::merger::hints::HintCode;
 use crate::merger::merge_enum::EnumTypeUsage;
 use crate::schema::FederationSchema;
 use crate::schema::directive_location::DirectiveLocationExt;
+use crate::schema::position::CompositeTypeDefinitionPosition;
 use crate::schema::position::DirectiveDefinitionPosition;
 use crate::schema::position::DirectiveTargetPosition;
-use crate::schema::position::CompositeTypeDefinitionPosition;
 use crate::schema::position::FieldDefinitionPosition;
+use crate::schema::position::InterfaceTypeDefinitionPosition;
 use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
 use crate::schema::position::ObjectTypeDefinitionPosition;
-use crate::schema::position::InterfaceTypeDefinitionPosition;
 use crate::schema::position::TypeDefinitionPosition;
 use crate::schema::referencer::DirectiveReferencers;
 use crate::schema::type_and_directive_specification::ArgumentMerger;
@@ -119,7 +119,9 @@ impl FieldMergeContext {
     }
 
     fn override_label(&self, idx: usize) -> Option<&str> {
-        self.props.get(&idx).and_then(|p| p.override_label.as_deref())
+        self.props
+            .get(&idx)
+            .and_then(|p| p.override_label.as_deref())
     }
 
     fn set_used_overridden(&mut self, idx: usize) {
@@ -816,16 +818,20 @@ impl Merger {
 
     // Helper functions that need to be implemented as stubs
 
-    fn merge_description<T>(&mut self, _sources: &Sources<Option<T>>, _dest: &mut T) {
-        todo!("Implement merge_description")
+    fn merge_description(
+        &mut self,
+        _sources: &Sources<FieldDefinitionPosition>,
+        _dest: &FieldDefinitionPosition,
+    ) {
+        // Placeholder for description merging
     }
 
-    fn record_applied_directives_to_merge<T>(
+    fn record_applied_directives_to_merge(
         &mut self,
-        _sources: &Sources<Option<T>>,
-        _dest: &mut T,
+        _sources: &Sources<FieldDefinitionPosition>,
+        _dest: &FieldDefinitionPosition,
     ) {
-        todo!("Implement record_applied_directives_to_merge")
+        // Placeholder for directive merging
     }
 
     fn is_inaccessible_directive_in_supergraph(&self, _value: &EnumValueDefinition) -> bool {
@@ -846,10 +852,7 @@ impl Merger {
 
         // If the subgraph defines the object type directly, then there is no
         // abstraction through an interface object.
-        if schema
-            .try_get_type(parent_obj.type_name.clone())
-            .is_some()
-        {
+        if schema.try_get_type(parent_obj.type_name.clone()).is_some() {
             return Vec::new();
         }
 
@@ -889,11 +892,8 @@ impl Merger {
             .collect()
     }
 
-
     fn is_external(&self, idx: usize, field: &FieldDefinitionPosition) -> bool {
-        self.subgraphs[idx]
-            .metadata()
-            .is_field_external(field)
+        self.subgraphs[idx].metadata().is_field_external(field)
     }
 
     fn needs_join_field(
@@ -943,7 +943,11 @@ impl Merger {
                         }
                     }
                 }
-            } else if self.subgraphs[idx].schema().try_get_type(parent_name.clone()).is_some() {
+            } else if self.subgraphs[idx]
+                .schema()
+                .try_get_type(parent_name.clone())
+                .is_some()
+            {
                 return true;
             }
         }
@@ -1081,19 +1085,105 @@ impl Merger {
                     .map(|c| &c.ty)
             };
 
-                let directive = self.join_field_directive(
-                    &graph,
-                    requires,
-                    provides,
+            let directive = self.join_field_directive(
+                &graph,
+                requires,
+                provides,
                 self.is_external(idx, source.as_ref().unwrap()),
-                    overrides,
-                    r#type,
-                );
+                overrides,
+                r#type,
+            );
 
             if let Ok(target) = ObjectOrInterfaceFieldDefinitionPosition::try_from(dest.clone()) {
                 let _ = target.insert_directive(&mut self.merged, Node::new(directive));
             }
         }
+    }
+
+    // --- Helper functions used during field merging ---
+
+    fn validate_and_filter_external(
+        &mut self,
+        sources: &Sources<FieldDefinitionPosition>,
+    ) -> Sources<FieldDefinitionPosition> {
+        let mut filtered: Sources<FieldDefinitionPosition> = Default::default();
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if self.is_external(idx, field) {
+                    filtered.insert(idx, None);
+                } else {
+                    filtered.insert(idx, Some(field.clone()));
+                }
+            } else {
+                filtered.insert(idx, None);
+            }
+        }
+        filtered
+    }
+
+    fn add_arguments_shallow(
+        &mut self,
+        _sources: &Sources<FieldDefinitionPosition>,
+        _dest: &FieldDefinitionPosition,
+    ) {
+        // Placeholder for argument merging logic
+    }
+
+    fn merge_arguments(
+        &mut self,
+        _sources: &Sources<FieldDefinitionPosition>,
+        _dest: &FieldDefinitionPosition,
+    ) {
+        // Placeholder for argument merging logic per argument
+    }
+
+    fn merge_type_reference(
+        &self,
+        sources: &Sources<FieldDefinitionPosition>,
+        dest: &FieldDefinitionPosition,
+    ) -> bool {
+        let Ok(dest_node) = dest.get(self.merged.schema()) else {
+            return true;
+        };
+        let dest_ty = &dest_node.ty;
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if let Ok(src_node) = field.get(self.subgraphs[idx].schema().schema()) {
+                    if src_node.ty != *dest_ty {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    fn has_external(&self, sources: &Sources<FieldDefinitionPosition>) -> bool {
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if self.is_external(idx, field) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn validate_external_fields(
+        &mut self,
+        _sources: &Sources<FieldDefinitionPosition>,
+        _dest: &FieldDefinitionPosition,
+        _all_types_equal: bool,
+    ) {
+        // Placeholder for external field validation
+    }
+
+    fn add_join_directive_directives(
+        &mut self,
+        _sources: &Sources<FieldDefinitionPosition>,
+        _dest: &FieldDefinitionPosition,
+    ) {
+        // Placeholder for @join__directive propagation
     }
 
     fn merge_field(
@@ -1110,10 +1200,8 @@ impl Merger {
                     break;
                 }
             } else {
-                let itf_fields =
-                    self.fields_in_source_if_abstracted_by_interface_object(dest, idx);
-                if itf_fields.is_empty() || !itf_fields.iter().all(|f| self.is_external(idx, f))
-                {
+                let itf_fields = self.fields_in_source_if_abstracted_by_interface_object(dest, idx);
+                if itf_fields.is_empty() || !itf_fields.iter().all(|f| self.is_external(idx, f)) {
                     every_external = false;
                     break;
                 }
@@ -1144,9 +1232,26 @@ impl Merger {
             return;
         }
 
-        // TODO: merge types, arguments, directives, etc.
-        let all_types_equal = true;
+        let without_external = self.validate_and_filter_external(sources);
+
+        self.merge_description(&without_external, dest);
+        self.record_applied_directives_to_merge(&without_external, dest);
+        self.add_arguments_shallow(&without_external, dest);
+        self.merge_arguments(&without_external, dest);
+
+        let sources_for_type = if without_external.values().any(|v| v.is_some()) {
+            &without_external
+        } else {
+            sources
+        };
+        let all_types_equal = self.merge_type_reference(sources_for_type, dest);
+
+        if self.has_external(sources) {
+            self.validate_external_fields(sources, dest, all_types_equal);
+        }
+
         self.add_join_field(sources, dest, all_types_equal, &merge_context);
+        self.add_join_directive_directives(sources, dest);
     }
 
     fn merge_object_type(
@@ -1158,11 +1263,7 @@ impl Merger {
             return;
         };
 
-        let mut field_names: IndexSet<Name> = dest_node
-            .fields
-            .keys()
-            .cloned()
-            .collect();
+        let mut field_names: IndexSet<Name> = dest_node.fields.keys().cloned().collect();
 
         for (&idx, source_obj) in sources.iter() {
             if let Some(obj_pos) = source_obj {
@@ -1189,7 +1290,11 @@ impl Merger {
             }
 
             let context = FieldMergeContext::new(&field_sources);
-            self.merge_field(&field_sources, &FieldDefinitionPosition::from(dest_field.clone()), context);
+            self.merge_field(
+                &field_sources,
+                &FieldDefinitionPosition::from(dest_field.clone()),
+                context,
+            );
         }
     }
 
@@ -1201,7 +1306,10 @@ impl Merger {
             .map(|arg| arg.value.as_ref())
     }
 
-    fn directive_string_arg_value<'a>(directive: &'a Directive, arg_name: &Name) -> Option<&'a str> {
+    fn directive_string_arg_value<'a>(
+        directive: &'a Directive,
+        arg_name: &Name,
+    ) -> Option<&'a str> {
         match Self::directive_arg_value(directive, arg_name) {
             Some(Value::String(value)) => Some(value),
             _ => None,
