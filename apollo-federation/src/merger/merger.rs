@@ -21,6 +21,14 @@ use crate::error::FederationError;
 use crate::internal_error;
 use crate::link::federation_spec_definition::FEDERATION_OPERATION_TYPES;
 use crate::link::federation_spec_definition::FEDERATION_VERSIONS;
+use crate::link::join_spec_definition::JOIN_CONTEXTARGUMENTS_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_EXTERNAL_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_OVERRIDE_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_OVERRIDE_LABEL_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_PROVIDES_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_REQUIRES_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_TYPE_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_USEROVERRIDDEN_ARGUMENT_NAME;
 use crate::link::join_spec_definition::JOIN_VERSIONS;
 use crate::link::join_spec_definition::JoinSpecDefinition;
 use crate::link::link_spec_definition::LINK_VERSIONS;
@@ -30,24 +38,26 @@ use crate::link::spec::Version;
 use crate::link::spec_definition::SpecDefinition;
 use crate::merger::compose_directive_manager::ComposeDirectiveManager;
 use crate::merger::error_reporter::ErrorReporter;
+use crate::merger::field_merge_context::FieldMergeContext;
 use crate::merger::hints::HintCode;
 use crate::merger::merge_enum::EnumTypeUsage;
 use crate::schema::FederationSchema;
 use crate::schema::directive_location::DirectiveLocationExt;
 use crate::schema::position::DirectiveDefinitionPosition;
 use crate::schema::position::DirectiveTargetPosition;
+use crate::schema::position::FieldDefinitionPosition;
 use crate::schema::position::InterfaceTypeDefinitionPosition;
 use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
-use crate::schema::position::FieldDefinitionPosition;
-use crate::merger::field_merge_context::FieldMergeContext;
 use crate::schema::position::TypeDefinitionPosition;
 use crate::schema::referencer::DirectiveReferencers;
 use crate::schema::type_and_directive_specification::ArgumentMerger;
 use crate::schema::type_and_directive_specification::StaticArgumentsTransform;
+use crate::schema::validators::from_context::parse_context;
 use crate::subgraph::typestate::Subgraph;
 use crate::subgraph::typestate::Validated;
 use crate::supergraph::CompositionHint;
 use crate::utils::human_readable::human_readable_subgraph_names;
+use apollo_compiler::name;
 
 static NON_MERGED_CORE_FEATURES: LazyLock<[Identity; 4]> = LazyLock::new(|| {
     [
@@ -774,13 +784,127 @@ impl Merger {
         }
 
         for (&idx, source) in sources.iter() {
-            if source.is_some() {
-                let join_name = self.join_spec_name(idx)?;
-                let directive = self
-                    .join_spec_definition
-                    .field_directive(&self.merged, join_name)?;
-                dest.insert_directive(&mut self.merged, Node::new(directive))?;
+            let Some(field) = source else { continue };
+
+            let subgraph_opt = self.subgraphs.get(idx);
+
+            let join_name = self.join_spec_name(idx)?;
+            let mut directive = self
+                .join_spec_definition
+                .field_directive(&self.merged, join_name)?;
+            if let Some(subgraph) = subgraph_opt {
+                if let Ok(Some(requires_name)) = subgraph.requires_directive_name() {
+                    if let Some(dir) = field.directives.get(&requires_name) {
+                        let args = subgraph
+                            .metadata()
+                            .federation_spec_definition()
+                            .requires_directive_arguments(dir)?;
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_REQUIRES_ARGUMENT_NAME,
+                            value: Node::new(Value::String(args.fields.to_string())),
+                        }));
+                    }
+                }
+
+                if let Ok(Some(provides_name)) = subgraph.provides_directive_name() {
+                    if let Some(dir) = field.directives.get(&provides_name) {
+                        let args = subgraph
+                            .metadata()
+                            .federation_spec_definition()
+                            .provides_directive_arguments(dir)?;
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_PROVIDES_ARGUMENT_NAME,
+                            value: Node::new(Value::String(args.fields.to_string())),
+                        }));
+                    }
+                }
+
+                if let Ok(Some(override_name)) = subgraph.override_directive_name() {
+                    if let Some(dir) = field.directives.get(&override_name) {
+                        let args = subgraph
+                            .metadata()
+                            .federation_spec_definition()
+                            .override_directive_arguments(dir)?;
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_OVERRIDE_ARGUMENT_NAME,
+                            value: Node::new(Value::String(args.from.to_string())),
+                        }));
+                        if let Some(label) = args.label {
+                            directive.arguments.push(Node::new(Argument {
+                                name: JOIN_OVERRIDE_LABEL_ARGUMENT_NAME,
+                                value: Node::new(Value::String(label.to_string())),
+                            }));
+                        }
+                    }
+                }
+
+                if !all_types_equal {
+                    directive.arguments.push(Node::new(Argument {
+                        name: JOIN_TYPE_ARGUMENT_NAME,
+                        value: Node::new(Value::String(field.ty.to_string())),
+                    }));
+                }
+
+                let field_pos: FieldDefinitionPosition = dest.clone().into();
+                if subgraph.metadata().is_field_external(&field_pos) {
+                    directive.arguments.push(Node::new(Argument {
+                        name: JOIN_EXTERNAL_ARGUMENT_NAME,
+                        value: Node::new(Value::Boolean(true)),
+                    }));
+                }
+
+                if let Ok(Some(from_context_name)) = subgraph.from_context_directive_name() {
+                    let mut ctx_args = Vec::new();
+                    for arg in &field.arguments {
+                        if let Some(fc_dir) = arg.directives.get(&from_context_name) {
+                            let fc_args = subgraph
+                                .metadata()
+                                .federation_spec_definition()
+                                .from_context_directive_arguments(fc_dir)?;
+                            if let (Some(ctx), Some(sel)) = parse_context(fc_args.field) {
+                                let ctx_name = format!("{}__{}", self.names[idx], ctx);
+                                let obj = vec![
+                                    (name!("context"), Node::new(Value::String(ctx_name))),
+                                    (
+                                        name!("name"),
+                                        Node::new(Value::String(arg.name.to_string())),
+                                    ),
+                                    (name!("type"), Node::new(Value::String(arg.ty.to_string()))),
+                                    (name!("selection"), Node::new(Value::String(sel))),
+                                ];
+                                ctx_args.push(Node::new(Value::Object(obj)));
+                            }
+                        }
+                    }
+                    if !ctx_args.is_empty() {
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_CONTEXTARGUMENTS_ARGUMENT_NAME,
+                            value: Node::new(Value::List(ctx_args)),
+                        }));
+                    }
+                }
+            } else if !all_types_equal {
+                // still record type when no subgraph data
+                directive.arguments.push(Node::new(Argument {
+                    name: JOIN_TYPE_ARGUMENT_NAME,
+                    value: Node::new(Value::String(field.ty.to_string())),
+                }));
             }
+
+            if merge_context.is_used_overridden(idx) {
+                directive.arguments.push(Node::new(Argument {
+                    name: JOIN_USEROVERRIDDEN_ARGUMENT_NAME,
+                    value: Node::new(Value::Boolean(true)),
+                }));
+            }
+            if let Some(label) = merge_context.override_label(idx) {
+                directive.arguments.push(Node::new(Argument {
+                    name: JOIN_OVERRIDE_LABEL_ARGUMENT_NAME,
+                    value: Node::new(Value::String(label.to_string())),
+                }));
+            }
+
+            dest.insert_directive(&mut self.merged, Node::new(directive))?;
         }
         Ok(())
     }
