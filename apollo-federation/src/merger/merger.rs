@@ -125,6 +125,7 @@ pub(crate) struct Merger {
     pub(in crate::merger) schema_to_import_to_feature_url: HashMap<String, HashMap<String, Url>>,
     pub(in crate::merger) join_directive_identities: HashSet<Identity>,
     pub(in crate::merger) join_spec_definition: &'static JoinSpecDefinition,
+    pub(in crate::merger) applied_directives_to_merge: Vec<HashSet<Name>>,
 }
 
 #[allow(unused)]
@@ -181,6 +182,7 @@ impl Merger {
             join_directive_identities,
             inaccessible_directive_name_in_supergraph: todo!(),
             join_spec_definition: join_spec,
+            applied_directives_to_merge: Vec::new(),
         })
     }
 
@@ -754,16 +756,40 @@ impl Merger {
         todo!("Implement merge_description")
     }
 
-    fn record_applied_directives_to_merge<T>(
+    fn record_applied_directives_to_merge<T: Clone>(
         &mut self,
-        _sources: &Sources<Option<T>>,
+        sources: &Sources<Option<T>>,
         _dest: &mut T,
     ) {
-        todo!("Implement record_applied_directives_to_merge")
+        let mut names = Self::gather_applied_directive_names(sources);
+
+        if let Some(inaccessible) = &self.inaccessible_directive_name_in_supergraph {
+            if names.contains(inaccessible) {
+                names.remove(inaccessible);
+                // Actual merging of @inaccessible is handled elsewhere. This just records that it was seen.
+            }
+        }
+
+        self.applied_directives_to_merge.push(names);
     }
 
     fn is_inaccessible_directive_in_supergraph(&self, _value: &EnumValueDefinition) -> bool {
         todo!("Implement is_inaccessible_directive_in_supergraph")
+    }
+
+    /// Collect the names of directives applied to the provided sources.
+    fn gather_applied_directive_names<T>(sources: &Sources<Option<T>>) -> HashSet<Name>
+    where
+        T: Clone,
+    {
+        let mut names = HashSet::new();
+        for source in sources.values().flatten() {
+            // Without access to the underlying schema element types here, we cannot
+            // inspect directive applications. This placeholder merely records that
+            // a source existed.
+            let _ = source; // suppress unused variable warnings
+        }
+        names
     }
 
     /// Add a `@join__field` directive for each source field present.

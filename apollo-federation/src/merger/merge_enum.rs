@@ -355,6 +355,7 @@ pub(crate) mod tests {
             join_spec_definition,
             join_directive_identities: Default::default(),
             schema_to_import_to_feature_url: Default::default(),
+            applied_directives_to_merge: Vec::new(),
         })
     }
 
