@@ -1,5 +1,6 @@
 mod compose_directive_manager;
 mod error_reporter;
+mod field_merge_context;
 mod hints;
 #[path = "merger.rs"]
 mod merge;

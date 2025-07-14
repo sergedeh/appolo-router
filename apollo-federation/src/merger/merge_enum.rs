@@ -303,6 +303,8 @@ pub(crate) mod tests {
 
             directive @join__unionMember(graph: join__Graph!, member: String!) repeatable on UNION
 
+            directive @join__field(graph: join__Graph) repeatable on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
             enum join__Graph {
                 A @join__graph(name: "A", url: "http://localhost:4002/")
                 B @join__graph(name: "B", url: "http://localhost:4003/")
@@ -353,6 +355,7 @@ pub(crate) mod tests {
             join_spec_definition,
             join_directive_identities: Default::default(),
             schema_to_import_to_feature_url: Default::default(),
+            applied_directives_to_merge: Vec::new(),
         })
     }
 
@@ -603,5 +606,66 @@ pub(crate) mod tests {
         assert!(enum_vals.contains(&"INACTIVE".to_string()));
         assert!(enum_vals.contains(&"PENDING".to_string()));
         // Should not generate any errors or hints
+    }
+
+    #[test]
+    fn test_add_join_field() {
+        use crate::schema::position::ObjectFieldDefinitionPosition;
+        use crate::schema::position::ObjectTypeDefinitionPosition;
+        use apollo_compiler::schema::{FieldDefinition, ObjectType, Type};
+
+        let mut merger = create_test_merger().expect("valid Merger object");
+
+        let obj_pos = ObjectTypeDefinitionPosition {
+            type_name: Name::new("User").expect("name"),
+        };
+        let obj = Node::new(ObjectType {
+            description: None,
+            name: Name::new("User").expect("name"),
+            directives: Default::default(),
+            fields: Default::default(),
+            implements_interfaces: Default::default(),
+        });
+        obj_pos.pre_insert(&mut merger.merged).unwrap();
+        obj_pos.insert(&mut merger.merged, obj).unwrap();
+
+        let field_pos = ObjectFieldDefinitionPosition {
+            type_name: Name::new("User").expect("name"),
+            field_name: Name::new("name").expect("name"),
+        };
+        let field = Component::new(FieldDefinition {
+            description: None,
+            name: Name::new("name").expect("name"),
+            arguments: vec![],
+            ty: Type::Named(Name::new("String").expect("name")),
+            directives: Default::default(),
+        });
+        field_pos.insert(&mut merger.merged, field).unwrap();
+
+        let src_field = Node::new(FieldDefinition {
+            description: None,
+            name: Name::new("name").expect("name"),
+            arguments: vec![],
+            ty: Type::Named(Name::new("String").expect("name")),
+            directives: Default::default(),
+        });
+
+        let sources: Sources<Node<FieldDefinition>> =
+            [(0, Some(src_field.clone())), (1, Some(src_field))]
+                .into_iter()
+                .collect();
+
+        merger
+            .fields_with_from_context
+            .object_fields
+            .insert(field_pos.clone());
+
+        merger
+            .merge_object_field(sources, &field_pos)
+            .expect("directive added");
+
+        let directives = field_pos
+            .get_applied_directives(&merger.merged, &Name::new("join__field").expect("name"));
+        assert_eq!(directives.len(), 2);
     }
 }

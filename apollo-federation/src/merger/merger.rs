@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::LazyLock;
 
 use apollo_compiler::Name;
@@ -11,15 +12,26 @@ use apollo_compiler::ast::DirectiveDefinition;
 use apollo_compiler::ast::Value;
 use apollo_compiler::collections::IndexMap;
 use apollo_compiler::schema::EnumValueDefinition;
+use apollo_compiler::schema::Component;
+use apollo_compiler::schema::FieldDefinition;
 use apollo_compiler::validation::Valid;
 use itertools::Itertools;
 
 use crate::bail;
 use crate::error::CompositionError;
 use crate::error::FederationError;
+use crate::error::SingleFederationError;
 use crate::internal_error;
 use crate::link::federation_spec_definition::FEDERATION_OPERATION_TYPES;
 use crate::link::federation_spec_definition::FEDERATION_VERSIONS;
+use crate::link::join_spec_definition::JOIN_CONTEXTARGUMENTS_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_EXTERNAL_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_OVERRIDE_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_OVERRIDE_LABEL_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_PROVIDES_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_REQUIRES_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_TYPE_ARGUMENT_NAME;
+use crate::link::join_spec_definition::JOIN_USEROVERRIDDEN_ARGUMENT_NAME;
 use crate::link::join_spec_definition::JOIN_VERSIONS;
 use crate::link::join_spec_definition::JoinSpecDefinition;
 use crate::link::link_spec_definition::LINK_VERSIONS;
@@ -29,21 +41,27 @@ use crate::link::spec::Version;
 use crate::link::spec_definition::SpecDefinition;
 use crate::merger::compose_directive_manager::ComposeDirectiveManager;
 use crate::merger::error_reporter::ErrorReporter;
+use crate::merger::field_merge_context::FieldMergeContext;
 use crate::merger::hints::HintCode;
 use crate::merger::merge_enum::EnumTypeUsage;
 use crate::schema::FederationSchema;
 use crate::schema::directive_location::DirectiveLocationExt;
 use crate::schema::position::DirectiveDefinitionPosition;
 use crate::schema::position::DirectiveTargetPosition;
+use crate::schema::position::FieldDefinitionPosition;
 use crate::schema::position::InterfaceTypeDefinitionPosition;
+use crate::schema::position::ObjectFieldDefinitionPosition;
+use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
 use crate::schema::position::TypeDefinitionPosition;
 use crate::schema::referencer::DirectiveReferencers;
 use crate::schema::type_and_directive_specification::ArgumentMerger;
 use crate::schema::type_and_directive_specification::StaticArgumentsTransform;
+use crate::schema::validators::from_context::parse_context;
 use crate::subgraph::typestate::Subgraph;
 use crate::subgraph::typestate::Validated;
 use crate::supergraph::CompositionHint;
 use crate::utils::human_readable::human_readable_subgraph_names;
+use apollo_compiler::name;
 
 static NON_MERGED_CORE_FEATURES: LazyLock<[Identity; 4]> = LazyLock::new(|| {
     [
@@ -67,6 +85,99 @@ static BUILT_IN_DIRECTIVES: [&str; 6] = [
 
 /// Type alias for Sources mapping - maps subgraph indices to optional values
 pub(crate) type Sources<T> = IndexMap<usize, Option<T>>;
+
+/// Trait for schema elements that expose a list of applied directives.
+pub(crate) trait HasDirectives {
+    fn directive_names(&self) -> Vec<Name>;
+}
+
+impl<T: HasDirectives> HasDirectives for Node<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        T::directive_names(self)
+    }
+}
+
+impl<T: HasDirectives + ?Sized> HasDirectives for Component<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        T::directive_names(&**self)
+    }
+}
+
+impl<T: HasDirectives> HasDirectives for Option<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        match self {
+            Some(v) => v.directive_names(),
+            None => Vec::new(),
+        }
+    }
+}
+
+impl<T: HasDirectives + ?Sized> HasDirectives for &T {
+    fn directive_names(&self) -> Vec<Name> {
+        (*self).directive_names()
+    }
+}
+
+
+impl HasDirectives for FieldDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|n| n.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for EnumValueDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|n| n.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InputValueDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::ObjectType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InterfaceType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::UnionType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::EnumType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InputObjectType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::ScalarType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::SchemaDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct MergeResult {
@@ -108,6 +219,7 @@ pub(crate) struct Merger {
     pub(in crate::merger) schema_to_import_to_feature_url: HashMap<String, HashMap<String, Url>>,
     pub(in crate::merger) join_directive_identities: HashSet<Identity>,
     pub(in crate::merger) join_spec_definition: &'static JoinSpecDefinition,
+    pub(in crate::merger) applied_directives_to_merge: Vec<HashSet<Name>>,
 }
 
 #[allow(unused)]
@@ -164,6 +276,7 @@ impl Merger {
             join_directive_identities,
             inaccessible_directive_name_in_supergraph: todo!(),
             join_spec_definition: join_spec,
+            applied_directives_to_merge: Vec::new(),
         })
     }
 
@@ -737,16 +850,405 @@ impl Merger {
         todo!("Implement merge_description")
     }
 
-    fn record_applied_directives_to_merge<T>(
+    fn record_applied_directives_to_merge<T: HasDirectives + Clone>(
         &mut self,
-        _sources: &Sources<Option<T>>,
+        sources: &Sources<Option<T>>,
         _dest: &mut T,
     ) {
-        todo!("Implement record_applied_directives_to_merge")
+        let mut names = self.gather_applied_directive_names(sources);
+
+        if let Some(inaccessible) = &self.inaccessible_directive_name_in_supergraph {
+            if names.contains(inaccessible) {
+                names.remove(inaccessible);
+                // Actual merging of @inaccessible is handled elsewhere. This just records that it was seen.
+            }
+        }
+
+        self.applied_directives_to_merge.push(names);
     }
 
     fn is_inaccessible_directive_in_supergraph(&self, _value: &EnumValueDefinition) -> bool {
         todo!("Implement is_inaccessible_directive_in_supergraph")
+    }
+
+    /// Collect the names of directives applied to the provided sources.
+    fn gather_applied_directive_names<T>(&self, sources: &Sources<Option<T>>) -> HashSet<Name>
+    where
+        T: HasDirectives + Clone,
+    {
+        let mut names = HashSet::new();
+        for (&idx, source) in sources.iter() {
+            for name in source.directive_names() {
+                if self.is_merged_directive(&self.names[idx], &Directive { name: name.clone(), arguments: vec![] }) {
+                    names.insert(name);
+                }
+            }
+        }
+        names
+    }
+
+    /// Add a `@join__field` directive for each source field present.
+    pub(crate) fn add_join_field(
+        &mut self,
+        sources: &Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+    ) -> Result<(), FederationError> {
+        let merge_context = FieldMergeContext::new(sources);
+        let mut iter = sources
+            .iter()
+            .filter_map(|(_, f)| f.as_ref().map(|field| &field.ty));
+        let all_types_equal = if let Some(first) = iter.next() {
+            iter.all(|ty| ty == first)
+        } else {
+            true
+        };
+
+        if !self.needs_join_field(sources, dest, all_types_equal, &merge_context) {
+            return Ok(());
+        }
+
+        for (&idx, source) in sources.iter() {
+            let Some(field) = source else { continue };
+
+            let subgraph_opt = self.subgraphs.get(idx);
+
+            let join_name = self.join_spec_name(idx)?;
+            let mut directive = self
+                .join_spec_definition
+                .field_directive(&self.merged, join_name)?;
+            if let Some(subgraph) = subgraph_opt {
+                if let Ok(Some(requires_name)) = subgraph.requires_directive_name() {
+                    if let Some(dir) = field.directives.get(&requires_name) {
+                        let args = subgraph
+                            .metadata()
+                            .federation_spec_definition()
+                            .requires_directive_arguments(dir)?;
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_REQUIRES_ARGUMENT_NAME,
+                            value: Node::new(Value::String(args.fields.to_string())),
+                        }));
+                    }
+                }
+
+                if let Ok(Some(provides_name)) = subgraph.provides_directive_name() {
+                    if let Some(dir) = field.directives.get(&provides_name) {
+                        let args = subgraph
+                            .metadata()
+                            .federation_spec_definition()
+                            .provides_directive_arguments(dir)?;
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_PROVIDES_ARGUMENT_NAME,
+                            value: Node::new(Value::String(args.fields.to_string())),
+                        }));
+                    }
+                }
+
+                if let Ok(Some(override_name)) = subgraph.override_directive_name() {
+                    if let Some(dir) = field.directives.get(&override_name) {
+                        let args = subgraph
+                            .metadata()
+                            .federation_spec_definition()
+                            .override_directive_arguments(dir)?;
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_OVERRIDE_ARGUMENT_NAME,
+                            value: Node::new(Value::String(args.from.to_string())),
+                        }));
+                        if let Some(label) = args.label {
+                            directive.arguments.push(Node::new(Argument {
+                                name: JOIN_OVERRIDE_LABEL_ARGUMENT_NAME,
+                                value: Node::new(Value::String(label.to_string())),
+                            }));
+                        }
+                    }
+                }
+
+                if !all_types_equal {
+                    directive.arguments.push(Node::new(Argument {
+                        name: JOIN_TYPE_ARGUMENT_NAME,
+                        value: Node::new(Value::String(field.ty.to_string())),
+                    }));
+                }
+
+                let field_pos: FieldDefinitionPosition = dest.clone().into();
+                if subgraph.metadata().is_field_external(&field_pos) {
+                    directive.arguments.push(Node::new(Argument {
+                        name: JOIN_EXTERNAL_ARGUMENT_NAME,
+                        value: Node::new(Value::Boolean(true)),
+                    }));
+                }
+
+                if let Ok(Some(from_context_name)) = subgraph.from_context_directive_name() {
+                    let mut ctx_args = Vec::new();
+                    for arg in &field.arguments {
+                        if let Some(fc_dir) = arg.directives.get(&from_context_name) {
+                            let fc_args = subgraph
+                                .metadata()
+                                .federation_spec_definition()
+                                .from_context_directive_arguments(fc_dir)?;
+                            if let (Some(ctx), Some(sel)) = parse_context(fc_args.field) {
+                                let ctx_name = format!("{}__{}", self.names[idx], ctx);
+                                let obj = vec![
+                                    (name!("context"), Node::new(Value::String(ctx_name))),
+                                    (
+                                        name!("name"),
+                                        Node::new(Value::String(arg.name.to_string())),
+                                    ),
+                                    (name!("type"), Node::new(Value::String(arg.ty.to_string()))),
+                                    (name!("selection"), Node::new(Value::String(sel))),
+                                ];
+                                ctx_args.push(Node::new(Value::Object(obj)));
+                            }
+                        }
+                    }
+                    if !ctx_args.is_empty() {
+                        directive.arguments.push(Node::new(Argument {
+                            name: JOIN_CONTEXTARGUMENTS_ARGUMENT_NAME,
+                            value: Node::new(Value::List(ctx_args)),
+                        }));
+                    }
+                }
+            } else if !all_types_equal {
+                // still record type when no subgraph data
+                directive.arguments.push(Node::new(Argument {
+                    name: JOIN_TYPE_ARGUMENT_NAME,
+                    value: Node::new(Value::String(field.ty.to_string())),
+                }));
+            }
+
+            if merge_context.is_used_overridden(idx) {
+                directive.arguments.push(Node::new(Argument {
+                    name: JOIN_USEROVERRIDDEN_ARGUMENT_NAME,
+                    value: Node::new(Value::Boolean(true)),
+                }));
+            }
+            if let Some(label) = merge_context.override_label(idx) {
+                directive.arguments.push(Node::new(Argument {
+                    name: JOIN_OVERRIDE_LABEL_ARGUMENT_NAME,
+                    value: Node::new(Value::String(label.to_string())),
+                }));
+            }
+
+            dest.insert_directive(&mut self.merged, Node::new(directive))?;
+        }
+        Ok(())
+    }
+
+    /// Merge an object field and attach `@join__field` directives.
+    pub(crate) fn merge_object_field(
+        &mut self,
+        sources: Sources<Node<FieldDefinition>>,
+        dest: &ObjectFieldDefinitionPosition,
+    ) -> Result<(), FederationError> {
+        self.merge_field(sources, &dest.clone().into())
+    }
+
+    /// Merge the given field sources into the destination field following the
+    /// JavaScript implementation. Currently this only checks for the case where
+    /// all sources are marked `@external` and attaches the corresponding join
+    /// metadata.
+    pub(crate) fn merge_field(
+        &mut self,
+        sources: Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+    ) -> Result<(), FederationError> {
+        let _without_external = self.validate_and_filter_external(&sources, dest);
+        // Determine if every source that defines the field marks it @external.
+        let mut every_external = true;
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if let Some(subgraph) = self.subgraphs.get(idx) {
+                    if !subgraph.metadata().is_field_external(&dest.clone().into()) {
+                        every_external = false;
+                        break;
+                    }
+                } else {
+                    every_external = false;
+                    break;
+                }
+            } else {
+                every_external = false;
+                break;
+            }
+        }
+
+        if every_external {
+            // TODO: report EXTERNAL_MISSING_ON_BASE error once error handling is fully implemented
+            return Ok(());
+        }
+
+        // TODO: merge descriptions, directives and arguments as in the JS implementation.
+
+        self.add_join_field(&sources, dest)
+    }
+
+    /// Determine whether a `@join__field` directive is required for this field merge.
+    pub(crate) fn needs_join_field(
+        &self,
+        sources: &Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+        all_types_equal: bool,
+        merge_context: &FieldMergeContext,
+    ) -> bool {
+        if !all_types_equal {
+            return true;
+        }
+
+        if merge_context.some(|props, _| props.used_overridden || props.override_label.is_some()) {
+            return true;
+        }
+
+        // Check if any source field has federation directives that require a
+        // join directive (@external, @requires, @provides).
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if let Some(subgraph) = self.subgraphs.get(idx) {
+                    let field_pos: FieldDefinitionPosition = dest.clone().into();
+                    let schema = subgraph.schema();
+                    let metadata = subgraph.metadata();
+
+                    if metadata.is_field_external(&field_pos) {
+                        return true;
+                    }
+
+                    if let Ok(Some(provides_name)) = subgraph.provides_directive_name() {
+                        if field_pos.has_applied_directive(schema, &provides_name) {
+                            return true;
+                        }
+                    }
+
+                    if let Ok(Some(requires_name)) = subgraph.requires_directive_name() {
+                        if field_pos.has_applied_directive(schema, &requires_name) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        let dest_coord = dest.coordinate();
+        if self
+            .fields_with_from_context
+            .object_or_interface_fields()
+            .any(|p| p.coordinate() == dest_coord)
+        {
+            return true;
+        }
+
+        for (&idx, source) in sources.iter() {
+            if source.is_none() {
+                if let Some(subgraph) = self.subgraphs.get(idx) {
+                    if subgraph
+                        .schema()
+                        .try_get_type(dest.type_name().clone())
+                        .is_some()
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Given a destination field in the supergraph and a particular subgraph index,
+    /// returns any instances of that field that exist on `@interfaceObject` types
+    /// in that subgraph which implement the destination object's interfaces.
+    fn fields_in_source_if_abstracted_by_interface_object(
+        &self,
+        dest_field: &FieldDefinitionPosition,
+        source_idx: usize,
+    ) -> Vec<FieldDefinitionPosition> {
+        use crate::schema::position::CompositeTypeDefinitionPosition;
+
+        let parent_in_supergraph = dest_field.parent();
+        let schema = self.subgraphs[source_idx].schema();
+
+        let CompositeTypeDefinitionPosition::Object(parent_obj) = parent_in_supergraph else {
+            return Vec::new();
+        };
+
+        if schema.try_get_type(parent_obj.type_name.clone()).is_some() {
+            return Vec::new();
+        }
+
+        let Ok(parent_obj_node) = parent_obj.get(self.merged.schema()) else {
+            return Vec::new();
+        };
+
+        parent_obj_node
+            .implements_interfaces
+            .iter()
+            .filter_map(|itf_name| {
+                let interface_pos = InterfaceTypeDefinitionPosition {
+                    type_name: itf_name.deref().clone(),
+                };
+
+                if interface_pos
+                    .field(dest_field.field_name().clone())
+                    .try_get(self.merged.schema())
+                    .is_none()
+                {
+                    return None;
+                }
+
+                match schema.try_get_type(itf_name.deref().clone()) {
+                    Some(TypeDefinitionPosition::Object(obj)) => {
+                        let field_pos = obj.field(dest_field.field_name().clone());
+                        if field_pos.try_get(schema.schema()).is_some() {
+                            Some(field_pos.into())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Return a copy of `sources` where any field marked `@external` in its
+    /// originating subgraph has been filtered out.  Also reports an error if
+    /// such external fields have merged directives applied to them.
+    fn validate_and_filter_external(
+        &mut self,
+        sources: &Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+    ) -> Sources<Node<FieldDefinition>> {
+        let mut filtered: IndexMap<usize, Option<Node<FieldDefinition>>> = IndexMap::default();
+        for (&idx, source) in sources.iter() {
+            let Some(field) = source else {
+                filtered.insert(idx, None);
+                continue;
+            };
+
+            let is_external = self
+                .subgraphs
+                .get(idx)
+                .map(|s| s.metadata().is_field_external(&dest.clone().into()))
+                .unwrap_or(false);
+
+            if !is_external {
+                filtered.insert(idx, Some(field.clone()));
+            } else {
+                filtered.insert(idx, None);
+                for directive in &field.directives {
+                    if self.is_merged_directive(&self.names[idx], directive) {
+                        self.error_reporter.add_subgraph_error(
+                            &self.names[idx],
+                            SingleFederationError::MergedDirectiveApplicationOnExternal {
+                                message: format!(
+                                    "Cannot apply merged directive {} to external field \"{}\"",
+                                    directive.name,
+                                    dest.coordinate(),
+                                ),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        filtered
     }
 
     // TODO: These error reporting functions are not yet fully implemented
