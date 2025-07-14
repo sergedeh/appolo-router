@@ -69,6 +69,7 @@ struct Merger {
     composition_hints: Vec<MergeWarning>,
     needs_inaccessible: bool,
     interface_objects: IndexSet<Name>,
+    description_sources: HashMap<String, String>,
 }
 
 pub struct MergeSuccess {
@@ -132,6 +133,7 @@ impl Merger {
             errors: Vec::new(),
             needs_inaccessible: false,
             interface_objects: IndexSet::default(),
+            description_sources: HashMap::default(),
         }
     }
 
@@ -325,15 +327,33 @@ impl Merger {
         Ok(())
     }
 
-    fn merge_descriptions<T: Eq + Clone>(&mut self, merged: &mut Option<T>, new: &Option<T>) {
+    fn merge_descriptions<T: Eq + Clone>(
+        &mut self,
+        element: &str,
+        subgraph_name: &str,
+        merged: &mut Option<T>,
+        new: &Option<T>,
+    ) {
         match (&mut *merged, new) {
             (_, None) => {}
-            (None, Some(_)) => merged.clone_from(new),
+            (None, Some(_)) => {
+                merged.clone_from(new);
+                self.description_sources
+                    .insert(element.to_string(), subgraph_name.to_string());
+            }
             (Some(a), Some(b)) => {
                 if a != b {
-                    // TODO add info about type and from/to subgraph
-                    self.composition_hints
-                        .push(String::from("conflicting descriptions"));
+                    let first = self
+                        .description_sources
+                        .get(element)
+                        .cloned()
+                        .unwrap_or_else(|| "another subgraph".to_string());
+                    self.composition_hints.push(format!(
+                        "conflicting descriptions for {element} between subgraphs {first} and {subgraph}",
+                        element = element,
+                        first = first,
+                        subgraph = subgraph_name
+                    ));
                 }
             }
         }
@@ -342,7 +362,12 @@ impl Merger {
     fn merge_schema(&mut self, supergraph_schema: &mut Schema, subgraph: &ValidFederationSubgraph) {
         let supergraph_def = &mut supergraph_schema.schema_definition.make_mut();
         let subgraph_def = &subgraph.schema.schema().schema_definition;
-        self.merge_descriptions(&mut supergraph_def.description, &subgraph_def.description);
+        self.merge_descriptions(
+            "schema",
+            &subgraph.name,
+            &mut supergraph_def.description,
+            &subgraph_def.description,
+        );
 
         if subgraph_def.query.is_some() {
             supergraph_def.query.clone_from(&subgraph_def.query);
@@ -370,7 +395,7 @@ impl Merger {
     ) {
         let existing_type = types
             .entry(enum_name.clone())
-            .or_insert(copy_enum_type(enum_name, enum_type));
+            .or_insert(copy_enum_type(enum_name.clone(), enum_type));
 
         if let ExtendedType::Enum(e) = existing_type {
             let join_type_directives =
@@ -383,7 +408,12 @@ impl Merger {
                 &enum_type.directives,
             );
 
-            self.merge_descriptions(&mut e.make_mut().description, &enum_type.description);
+            self.merge_descriptions(
+                &format!("enum {}", enum_name),
+                &subgraph_name.to_name().to_string(),
+                &mut e.make_mut().description,
+                &enum_type.description,
+            );
 
             // TODO we need to merge those fields LAST so we know whether enum is used as input/output/both as different merge rules will apply
             // below logic only works for output enums
@@ -397,7 +427,12 @@ impl Merger {
                         description: None,
                         directives: Default::default(),
                     }));
-                self.merge_descriptions(&mut ev.make_mut().description, &enum_value.description);
+                self.merge_descriptions(
+                    &format!("enum value {}.{}", enum_name, enum_value_name),
+                    &subgraph_name.to_name().to_string(),
+                    &mut ev.make_mut().description,
+                    &enum_value.description,
+                );
 
                 self.add_inaccessible(
                     metadata,
@@ -499,7 +534,7 @@ impl Merger {
     ) {
         let existing_type = types
             .entry(interface_name.clone())
-            .or_insert(copy_interface_type(interface_name, interface));
+            .or_insert(copy_interface_type(interface_name.clone(), interface));
 
         if let ExtendedType::Interface(intf) = existing_type {
             let key_directives = interface.directives.get_all(&directive_names.key);
@@ -554,6 +589,8 @@ impl Merger {
                     directive_names,
                 );
                 self.merge_descriptions(
+                    &format!("field {}.{}", interface_name, field_name),
+                    &subgraph_name.to_name().to_string(),
                     &mut supergraph_field.make_mut().description,
                     &field.description,
                 );
@@ -595,7 +632,7 @@ impl Merger {
         let existing_type = types
             .entry(object_name.clone())
             .or_insert(copy_object_type_stub(
-                object_name,
+                object_name.clone(),
                 object,
                 is_interface_object,
             ));
@@ -606,7 +643,12 @@ impl Merger {
                 join_type_applied_directive(subgraph_name.clone(), key_directives, false);
             let mutable_object = obj.make_mut();
             mutable_object.directives.extend(join_type_directives);
-            self.merge_descriptions(&mut mutable_object.description, &object.description);
+            self.merge_descriptions(
+                &format!("type {}", object_name),
+                &subgraph_name.to_name().to_string(),
+                &mut mutable_object.description,
+                &object.description,
+            );
             self.add_inaccessible(
                 directive_names,
                 &mut mutable_object.directives,
@@ -645,6 +687,8 @@ impl Merger {
                     })),
                 };
                 self.merge_descriptions(
+                    &format!("field {}.{}", object_name, field_name),
+                    &subgraph_name.to_name().to_string(),
                     &mut supergraph_field.make_mut().description,
                     &field.description,
                 );
@@ -670,7 +714,12 @@ impl Merger {
                 join_type_applied_directive(subgraph_name.clone(), key_directives, true);
             let mutable_object = intf.make_mut();
             mutable_object.directives.extend(join_type_directives);
-            self.merge_descriptions(&mut mutable_object.description, &object.description);
+            self.merge_descriptions(
+                &format!("type {}", object_name),
+                &subgraph_name.to_name().to_string(),
+                &mut mutable_object.description,
+                &object.description,
+            );
             self.add_inaccessible(
                 directive_names,
                 &mut mutable_object.directives,
@@ -700,6 +749,8 @@ impl Merger {
                     })),
                 };
                 self.merge_descriptions(
+                    &format!("field {}.{}", object_name, field_name),
+                    &subgraph_name.to_name().to_string(),
                     &mut supergraph_field.make_mut().description,
                     &field.description,
                 );
@@ -844,7 +895,12 @@ impl Merger {
         directive_names: &DirectiveNames,
         subgraph_name: &EnumValue,
     ) {
-        self.merge_descriptions(&mut supergraph_field.description, &field.description);
+        self.merge_descriptions(
+            "field",
+            &subgraph_name.to_name().to_string(),
+            &mut supergraph_field.description,
+            &field.description,
+        );
         self.add_inaccessible(
             directive_names,
             &mut supergraph_field.directives,
