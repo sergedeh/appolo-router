@@ -46,8 +46,8 @@ use crate::schema::directive_location::DirectiveLocationExt;
 use crate::schema::position::DirectiveDefinitionPosition;
 use crate::schema::position::DirectiveTargetPosition;
 use crate::schema::position::FieldDefinitionPosition;
-use crate::schema::position::ObjectFieldDefinitionPosition;
 use crate::schema::position::InterfaceTypeDefinitionPosition;
+use crate::schema::position::ObjectFieldDefinitionPosition;
 use crate::schema::position::ObjectOrInterfaceFieldDefinitionPosition;
 use crate::schema::position::TypeDefinitionPosition;
 use crate::schema::referencer::DirectiveReferencers;
@@ -946,21 +946,21 @@ impl Merger {
                     let schema = subgraph.schema();
                     let metadata = subgraph.metadata();
 
-                        if metadata.is_field_external(&field_pos) {
+                    if metadata.is_field_external(&field_pos) {
+                        return true;
+                    }
+
+                    if let Ok(Some(provides_name)) = subgraph.provides_directive_name() {
+                        if field_pos.has_applied_directive(schema, &provides_name) {
                             return true;
                         }
+                    }
 
-                        if let Ok(Some(provides_name)) = subgraph.provides_directive_name() {
-                            if field_pos.has_applied_directive(schema, &provides_name) {
-                                return true;
-                            }
+                    if let Ok(Some(requires_name)) = subgraph.requires_directive_name() {
+                        if field_pos.has_applied_directive(schema, &requires_name) {
+                            return true;
                         }
-
-                        if let Ok(Some(requires_name)) = subgraph.requires_directive_name() {
-                            if field_pos.has_applied_directive(schema, &requires_name) {
-                                return true;
-                            }
-                        }
+                    }
                 }
             }
         }

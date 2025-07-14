@@ -655,23 +655,12 @@ impl Merger {
                     &field.directives,
                 );
 
-            fields::merge_arguments(
-                field.arguments.iter(),
-                &mut supergraph_field.make_mut().arguments,
-                self,
-                directive_names,
-            );
-
-                self.add_join_field(
-                    &mut supergraph_field.make_mut().directives,
+                self.merge_field(
                     field,
+                    supergraph_field.make_mut(),
                     directive_names,
                     subgraph_name,
                 );
-
-                // TODO: replace this direct call with `merge_field` once that
-                // helper is ported. That will internally decide whether a
-                // `@join__field` directive is required.
             }
         } else if let ExtendedType::Interface(intf) = existing_type {
             self.interface_objects.insert(intf.name.clone());
@@ -721,23 +710,12 @@ impl Merger {
                     &field.directives,
                 );
 
-                fields::merge_arguments(
-                    field.arguments.iter(),
-                    &mut supergraph_field.make_mut().arguments,
-                    self,
-                    directive_names,
-                );
-
-                self.add_join_field(
-                    &mut supergraph_field.make_mut().directives,
+                self.merge_field(
                     field,
+                    supergraph_field.make_mut(),
                     directive_names,
                     subgraph_name,
                 );
-
-                // TODO: replace this direct call with `merge_field` once that
-                // helper is ported. That will internally decide whether a
-                // `@join__field` directive is required.
             }
         };
         // TODO merge fields
@@ -835,8 +813,7 @@ impl Merger {
             .get_all(&directive_names.r#override)
             .next()
             .and_then(|p| {
-                let overrides_from =
-                    directive_string_arg_value(p, &FEDERATION_FROM_ARGUMENT_NAME);
+                let overrides_from = directive_string_arg_value(p, &FEDERATION_FROM_ARGUMENT_NAME);
                 let overrides_label =
                     directive_string_arg_value(p, &FEDERATION_OVERRIDE_LABEL_ARGUMENT_NAME);
                 overrides_from.map(|from| (from, overrides_label))
@@ -858,6 +835,33 @@ impl Merger {
         );
 
         directives.push(Node::new(join_field_directive));
+    }
+
+    fn merge_field(
+        &mut self,
+        field: &FieldDefinition,
+        supergraph_field: &mut FieldDefinition,
+        directive_names: &DirectiveNames,
+        subgraph_name: &EnumValue,
+    ) {
+        self.merge_descriptions(&mut supergraph_field.description, &field.description);
+        self.add_inaccessible(
+            directive_names,
+            &mut supergraph_field.directives,
+            &field.directives,
+        );
+        fields::merge_arguments(
+            field.arguments.iter(),
+            &mut supergraph_field.arguments,
+            self,
+            directive_names,
+        );
+        self.add_join_field(
+            &mut supergraph_field.directives,
+            field,
+            directive_names,
+            subgraph_name,
+        );
     }
 
     // generic so it handles ast::DirectiveList and schema::DirectiveList
