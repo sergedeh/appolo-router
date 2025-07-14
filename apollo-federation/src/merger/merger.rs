@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::LazyLock;
 
 use apollo_compiler::Name;
@@ -1025,6 +1026,62 @@ impl Merger {
         }
 
         false
+    }
+
+    /// Given a destination field in the supergraph and a particular subgraph index,
+    /// returns any instances of that field that exist on `@interfaceObject` types
+    /// in that subgraph which implement the destination object's interfaces.
+    fn fields_in_source_if_abstracted_by_interface_object(
+        &self,
+        dest_field: &FieldDefinitionPosition,
+        source_idx: usize,
+    ) -> Vec<FieldDefinitionPosition> {
+        use crate::schema::position::CompositeTypeDefinitionPosition;
+
+        let parent_in_supergraph = dest_field.parent();
+        let schema = self.subgraphs[source_idx].schema();
+
+        let CompositeTypeDefinitionPosition::Object(parent_obj) = parent_in_supergraph else {
+            return Vec::new();
+        };
+
+        if schema.try_get_type(parent_obj.type_name.clone()).is_some() {
+            return Vec::new();
+        }
+
+        let Ok(parent_obj_node) = parent_obj.get(self.merged.schema()) else {
+            return Vec::new();
+        };
+
+        parent_obj_node
+            .implements_interfaces
+            .iter()
+            .filter_map(|itf_name| {
+                let interface_pos = InterfaceTypeDefinitionPosition {
+                    type_name: itf_name.deref().clone(),
+                };
+
+                if interface_pos
+                    .field(dest_field.field_name().clone())
+                    .try_get(self.merged.schema())
+                    .is_none()
+                {
+                    return None;
+                }
+
+                match schema.try_get_type(itf_name.deref().clone()) {
+                    Some(TypeDefinitionPosition::Object(obj)) => {
+                        let field_pos = obj.field(dest_field.field_name().clone());
+                        if field_pos.try_get(schema.schema()).is_some() {
+                            Some(field_pos.into())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     // TODO: These error reporting functions are not yet fully implemented
