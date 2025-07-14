@@ -19,6 +19,7 @@ use itertools::Itertools;
 use crate::bail;
 use crate::error::CompositionError;
 use crate::error::FederationError;
+use crate::error::SingleFederationError;
 use crate::internal_error;
 use crate::link::federation_spec_definition::FEDERATION_OPERATION_TYPES;
 use crate::link::federation_spec_definition::FEDERATION_VERSIONS;
@@ -929,6 +930,7 @@ impl Merger {
         sources: Sources<Node<FieldDefinition>>,
         dest: &ObjectOrInterfaceFieldDefinitionPosition,
     ) -> Result<(), FederationError> {
+        let _without_external = self.validate_and_filter_external(&sources, dest);
         // Determine if every source that defines the field marks it @external.
         let mut every_external = true;
         for (&idx, source) in sources.iter() {
@@ -1082,6 +1084,50 @@ impl Merger {
                 }
             })
             .collect()
+    }
+
+    /// Return a copy of `sources` where any field marked `@external` in its
+    /// originating subgraph has been filtered out.  Also reports an error if
+    /// such external fields have merged directives applied to them.
+    fn validate_and_filter_external(
+        &mut self,
+        sources: &Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+    ) -> Sources<Node<FieldDefinition>> {
+        let mut filtered: IndexMap<usize, Option<Node<FieldDefinition>>> = IndexMap::default();
+        for (&idx, source) in sources.iter() {
+            let Some(field) = source else {
+                filtered.insert(idx, None);
+                continue;
+            };
+
+            let is_external = self
+                .subgraphs
+                .get(idx)
+                .map(|s| s.metadata().is_field_external(&dest.clone().into()))
+                .unwrap_or(false);
+
+            if !is_external {
+                filtered.insert(idx, Some(field.clone()));
+            } else {
+                filtered.insert(idx, None);
+                for directive in &field.directives {
+                    if self.is_merged_directive(&self.names[idx], directive) {
+                        self.error_reporter.add_subgraph_error(
+                            &self.names[idx],
+                            SingleFederationError::MergedDirectiveApplicationOnExternal {
+                                message: format!(
+                                    "Cannot apply merged directive {} to external field \"{}\"",
+                                    directive.name,
+                                    dest.coordinate(),
+                                ),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        filtered
     }
 
     // TODO: These error reporting functions are not yet fully implemented
