@@ -19,6 +19,7 @@ use apollo_compiler::ast::NamedType;
 use apollo_compiler::ast::Type;
 use apollo_compiler::ast::Value;
 use apollo_compiler::collections::HashMap;
+use std::collections::HashSet;
 use apollo_compiler::collections::IndexMap;
 use apollo_compiler::collections::IndexSet;
 use apollo_compiler::name;
@@ -61,6 +62,98 @@ use crate::link::spec_definition::SpecDefinition;
 use crate::schema::ValidFederationSchema;
 use crate::subgraph::ValidSubgraph;
 
+/// Trait for schema elements that expose a list of applied directive names.
+trait HasDirectives {
+    fn directive_names(&self) -> Vec<Name>;
+}
+
+impl<T: HasDirectives> HasDirectives for Node<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        T::directive_names(self)
+    }
+}
+
+impl<T: HasDirectives + ?Sized> HasDirectives for Component<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        T::directive_names(&**self)
+    }
+}
+
+impl<T: HasDirectives> HasDirectives for Option<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        match self {
+            Some(v) => v.directive_names(),
+            None => Vec::new(),
+        }
+    }
+}
+
+impl<T: HasDirectives + ?Sized> HasDirectives for &T {
+    fn directive_names(&self) -> Vec<Name> {
+        (*self).directive_names()
+    }
+}
+
+impl HasDirectives for FieldDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for EnumValueDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InputValueDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::ObjectType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InterfaceType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::UnionType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::EnumType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InputObjectType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::ScalarType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::SchemaDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.iter().map(|d| d.name.clone()).collect()
+    }
+}
+
 type MergeWarning = String;
 type MergeError = String;
 
@@ -70,6 +163,7 @@ struct Merger {
     needs_inaccessible: bool,
     interface_objects: IndexSet<Name>,
     description_sources: HashMap<String, String>,
+    applied_directives_to_merge: Vec<HashSet<Name>>,
 }
 
 pub struct MergeSuccess {
@@ -134,6 +228,7 @@ impl Merger {
             needs_inaccessible: false,
             interface_objects: IndexSet::default(),
             description_sources: HashMap::default(),
+            applied_directives_to_merge: Vec::new(),
         }
     }
 
@@ -946,6 +1041,30 @@ impl Merger {
                 .into(),
             );
         }
+    }
+
+    fn gather_applied_directive_names<T>(&self, sources: &[Option<&T>]) -> HashSet<Name>
+    where
+        T: HasDirectives,
+    {
+        let mut names = HashSet::new();
+        for source in sources {
+            if let Some(value) = source {
+                for name in value.directive_names() {
+                    names.insert(name);
+                }
+            }
+        }
+        names
+    }
+
+    fn record_applied_directives_to_merge<T: HasDirectives + Clone>(
+        &mut self,
+        sources: &[Option<&T>],
+        _dest: &mut T,
+    ) {
+        let names = self.gather_applied_directive_names(sources);
+        self.applied_directives_to_merge.push(names);
     }
 }
 
