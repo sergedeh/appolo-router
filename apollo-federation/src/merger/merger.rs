@@ -916,9 +916,45 @@ impl Merger {
         sources: Sources<Node<FieldDefinition>>,
         dest: &ObjectFieldDefinitionPosition,
     ) -> Result<(), FederationError> {
-        // In the future this will merge descriptions, arguments and types.
-        // For now we only attach join directives for the given sources.
-        self.add_join_field(&sources, &dest.clone().into())
+        self.merge_field(sources, &dest.clone().into())
+    }
+
+    /// Merge the given field sources into the destination field following the
+    /// JavaScript implementation. Currently this only checks for the case where
+    /// all sources are marked `@external` and attaches the corresponding join
+    /// metadata.
+    pub(crate) fn merge_field(
+        &mut self,
+        sources: Sources<Node<FieldDefinition>>,
+        dest: &ObjectOrInterfaceFieldDefinitionPosition,
+    ) -> Result<(), FederationError> {
+        // Determine if every source that defines the field marks it @external.
+        let mut every_external = true;
+        for (&idx, source) in sources.iter() {
+            if let Some(field) = source {
+                if let Some(subgraph) = self.subgraphs.get(idx) {
+                    if !subgraph.metadata().is_field_external(&dest.clone().into()) {
+                        every_external = false;
+                        break;
+                    }
+                } else {
+                    every_external = false;
+                    break;
+                }
+            } else {
+                every_external = false;
+                break;
+            }
+        }
+
+        if every_external {
+            // TODO: report EXTERNAL_MISSING_ON_BASE error once error handling is fully implemented
+            return Ok(());
+        }
+
+        // TODO: merge descriptions, directives and arguments as in the JS implementation.
+
+        self.add_join_field(&sources, dest)
     }
 
     /// Determine whether a `@join__field` directive is required for this field merge.
