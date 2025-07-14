@@ -669,8 +669,9 @@ impl Merger {
                     subgraph_name,
                 );
 
-                // TODO: implement needsJoinField to avoid adding join__field when unnecessary
-                // https://github.com/apollographql/federation/blob/0d8a88585d901dff6844fdce1146a4539dec48df/composition-js/src/merging/merge.ts#L1648
+                // TODO: replace this direct call with `merge_field` once that
+                // helper is ported. That will internally decide whether a
+                // `@join__field` directive is required.
             }
         } else if let ExtendedType::Interface(intf) = existing_type {
             self.interface_objects.insert(intf.name.clone());
@@ -734,8 +735,9 @@ impl Merger {
                     subgraph_name,
                 );
 
-                // TODO: implement needsJoinField to avoid adding join__field when unnecessary
-                // https://github.com/apollographql/federation/blob/0d8a88585d901dff6844fdce1146a4539dec48df/composition-js/src/merging/merge.ts#L1648
+                // TODO: replace this direct call with `merge_field` once that
+                // helper is ported. That will internally decide whether a
+                // `@join__field` directive is required.
             }
         };
         // TODO merge fields
