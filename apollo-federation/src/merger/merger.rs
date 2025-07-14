@@ -12,6 +12,7 @@ use apollo_compiler::ast::DirectiveDefinition;
 use apollo_compiler::ast::Value;
 use apollo_compiler::collections::IndexMap;
 use apollo_compiler::schema::EnumValueDefinition;
+use apollo_compiler::schema::Component;
 use apollo_compiler::schema::FieldDefinition;
 use apollo_compiler::validation::Valid;
 use itertools::Itertools;
@@ -84,6 +85,99 @@ static BUILT_IN_DIRECTIVES: [&str; 6] = [
 
 /// Type alias for Sources mapping - maps subgraph indices to optional values
 pub(crate) type Sources<T> = IndexMap<usize, Option<T>>;
+
+/// Trait for schema elements that expose a list of applied directives.
+pub(crate) trait HasDirectives {
+    fn directive_names(&self) -> Vec<Name>;
+}
+
+impl<T: HasDirectives> HasDirectives for Node<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        T::directive_names(self)
+    }
+}
+
+impl<T: HasDirectives + ?Sized> HasDirectives for Component<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        T::directive_names(&**self)
+    }
+}
+
+impl<T: HasDirectives> HasDirectives for Option<T> {
+    fn directive_names(&self) -> Vec<Name> {
+        match self {
+            Some(v) => v.directive_names(),
+            None => Vec::new(),
+        }
+    }
+}
+
+impl<T: HasDirectives + ?Sized> HasDirectives for &T {
+    fn directive_names(&self) -> Vec<Name> {
+        (*self).directive_names()
+    }
+}
+
+
+impl HasDirectives for FieldDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|n| n.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for EnumValueDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|n| n.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InputValueDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::ObjectType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InterfaceType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::UnionType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::EnumType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::InputObjectType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::ScalarType {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
+
+impl HasDirectives for apollo_compiler::schema::SchemaDefinition {
+    fn directive_names(&self) -> Vec<Name> {
+        self.directives.0.iter().map(|c| c.name.clone()).collect()
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct MergeResult {
@@ -756,12 +850,12 @@ impl Merger {
         todo!("Implement merge_description")
     }
 
-    fn record_applied_directives_to_merge<T: Clone>(
+    fn record_applied_directives_to_merge<T: HasDirectives + Clone>(
         &mut self,
         sources: &Sources<Option<T>>,
         _dest: &mut T,
     ) {
-        let mut names = Self::gather_applied_directive_names(sources);
+        let mut names = self.gather_applied_directive_names(sources);
 
         if let Some(inaccessible) = &self.inaccessible_directive_name_in_supergraph {
             if names.contains(inaccessible) {
@@ -778,16 +872,17 @@ impl Merger {
     }
 
     /// Collect the names of directives applied to the provided sources.
-    fn gather_applied_directive_names<T>(sources: &Sources<Option<T>>) -> HashSet<Name>
+    fn gather_applied_directive_names<T>(&self, sources: &Sources<Option<T>>) -> HashSet<Name>
     where
-        T: Clone,
+        T: HasDirectives + Clone,
     {
         let mut names = HashSet::new();
-        for source in sources.values().flatten() {
-            // Without access to the underlying schema element types here, we cannot
-            // inspect directive applications. This placeholder merely records that
-            // a source existed.
-            let _ = source; // suppress unused variable warnings
+        for (&idx, source) in sources.iter() {
+            for name in source.directive_names() {
+                if self.is_merged_directive(&self.names[idx], &Directive { name: name.clone(), arguments: vec![] }) {
+                    names.insert(name);
+                }
+            }
         }
         names
     }
