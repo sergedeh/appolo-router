@@ -447,17 +447,21 @@ impl Merger {
             for (field_name, field) in input_object.fields.iter() {
                 let existing_field = mutable_object.fields.entry(field_name.clone());
 
+                let needs_join;
                 let supergraph_field = match existing_field {
-                    Vacant(i) => i.insert(Component::new(InputValueDefinition {
-                        name: field.name.clone(),
-                        description: field.description.clone(),
-                        ty: field.ty.clone(),
-                        default_value: field.default_value.clone(),
-                        directives: Default::default(),
-                    })),
+                    Vacant(i) => {
+                        needs_join = Self::needs_join_input_field(None, field);
+                        i.insert(Component::new(InputValueDefinition {
+                            name: field.name.clone(),
+                            description: field.description.clone(),
+                            ty: field.ty.clone(),
+                            default_value: field.default_value.clone(),
+                            directives: Default::default(),
+                        }))
+                    }
                     Occupied(i) => {
+                        needs_join = Self::needs_join_input_field(Some(&i.get().node), field);
                         i.into_mut()
-                        // merge_options(&i.get_mut().description, &field.description);
                         // TODO check description
                         // TODO check type
                         // TODO check default value
@@ -479,7 +483,7 @@ impl Merger {
                     None,
                     Some(&field.ty),
                 );
-                if Self::needs_join_field(None, None, false, None) {
+                if needs_join {
                     supergraph_field
                         .make_mut()
                         .directives
@@ -528,16 +532,10 @@ impl Merger {
                 });
 
             for (field_name, field) in interface.fields.iter() {
-                let existing_field = mutable_intf.fields.entry(field_name.clone());
-                let supergraph_field = match existing_field {
-                    Occupied(f) => {
-                        f.into_mut()
-                        // TODO check description
-                        // TODO check type
-                        // TODO check default value
-                        // TODO process directives
-                    }
-                    Vacant(f) => {
+                let entry = mutable_intf.fields.entry(field_name.clone());
+                let (was_existing, supergraph_field) = match entry {
+                    Occupied(f) => (true, f.into_mut()),
+                    Vacant(f) => (false, {
                         // TODO warning mismatch missing fields
                         f.insert(Component::new(FieldDefinition {
                             name: field.name.clone(),
@@ -546,7 +544,7 @@ impl Merger {
                             ty: field.ty.clone(),
                             directives: Default::default(),
                         }))
-                    }
+                    }),
                 };
 
                 fields::merge_arguments(
@@ -566,6 +564,19 @@ impl Merger {
                     &field.directives,
                 );
 
+                let needs_join = Self::needs_join_field(
+                    if was_existing {
+                        Some(&supergraph_field.node)
+                    } else {
+                        None
+                    },
+                    field,
+                    None,
+                    None,
+                    false,
+                    None,
+                );
+
                 let join_field_directive = join_field_applied_directive(
                     subgraph_name,
                     None,
@@ -575,7 +586,7 @@ impl Merger {
                     Some(&field.ty),
                 );
 
-                if Self::needs_join_field(None, None, false, None) {
+                if needs_join {
                     supergraph_field
                         .make_mut()
                         .directives
@@ -632,21 +643,19 @@ impl Merger {
                     continue;
                 }
 
-                let existing_field = mutable_object.fields.entry(field_name.clone());
-                let supergraph_field = match existing_field {
-                    Occupied(f) => {
-                        // check description
-                        // check type
-                        // check args
-                        f.into_mut()
-                    }
-                    Vacant(f) => f.insert(Component::new(FieldDefinition {
-                        name: field.name.clone(),
-                        description: field.description.clone(),
-                        arguments: vec![],
-                        directives: Default::default(),
-                        ty: field.ty.clone(),
-                    })),
+                let entry = mutable_object.fields.entry(field_name.clone());
+                let (was_existing, supergraph_field) = match entry {
+                    Occupied(f) => (true, f.into_mut()),
+                    Vacant(f) => (
+                        false,
+                        f.insert(Component::new(FieldDefinition {
+                            name: field.name.clone(),
+                            description: field.description.clone(),
+                            arguments: vec![],
+                            directives: Default::default(),
+                            ty: field.ty.clone(),
+                        })),
+                    ),
                 };
                 self.merge_descriptions(
                     &mut supergraph_field.make_mut().description,
@@ -696,6 +705,19 @@ impl Merger {
                     .next()
                     .is_some();
 
+                let needs_join = Self::needs_join_field(
+                    if was_existing {
+                        Some(&supergraph_field.node)
+                    } else {
+                        None
+                    },
+                    field,
+                    requires_directive_option,
+                    provides_directive_option,
+                    external_field,
+                    overrides_directive_option,
+                );
+
                 let join_field_directive = join_field_applied_directive(
                     subgraph_name,
                     requires_directive_option,
@@ -705,12 +727,7 @@ impl Merger {
                     Some(&field.ty),
                 );
 
-                if Self::needs_join_field(
-                    requires_directive_option,
-                    provides_directive_option,
-                    external_field,
-                    overrides_directive_option,
-                ) {
+                if needs_join {
                     supergraph_field
                         .make_mut()
                         .directives
@@ -741,21 +758,19 @@ impl Merger {
                     continue;
                 }
 
-                let existing_field = mutable_object.fields.entry(field_name.clone());
-                let supergraph_field = match existing_field {
-                    Occupied(f) => {
-                        // check description
-                        // check type
-                        // check args
-                        f.into_mut()
-                    }
-                    Vacant(f) => f.insert(Component::new(FieldDefinition {
-                        name: field.name.clone(),
-                        description: field.description.clone(),
-                        arguments: vec![],
-                        directives: Default::default(),
-                        ty: field.ty.clone(),
-                    })),
+                let entry = mutable_object.fields.entry(field_name.clone());
+                let (was_existing, mut supergraph_field) = match entry {
+                    Occupied(f) => (true, f.into_mut()),
+                    Vacant(f) => (
+                        false,
+                        f.insert(Component::new(FieldDefinition {
+                            name: field.name.clone(),
+                            description: field.description.clone(),
+                            arguments: vec![],
+                            directives: Default::default(),
+                            ty: field.ty.clone(),
+                        })),
+                    ),
                 };
                 self.merge_descriptions(
                     &mut supergraph_field.make_mut().description,
@@ -804,6 +819,19 @@ impl Merger {
                     .next()
                     .is_some();
 
+                let needs_join = Self::needs_join_field(
+                    if was_existing {
+                        Some(&supergraph_field.node)
+                    } else {
+                        None
+                    },
+                    field,
+                    None,
+                    None,
+                    false,
+                    None,
+                );
+
                 let join_field_directive = join_field_applied_directive(
                     subgraph_name,
                     requires_directive_option,
@@ -813,12 +841,7 @@ impl Merger {
                     Some(&field.ty),
                 );
 
-                if Self::needs_join_field(
-                    requires_directive_option,
-                    provides_directive_option,
-                    external_field,
-                    overrides_directive_option,
-                ) {
+                if needs_join {
                     supergraph_field
                         .make_mut()
                         .directives
@@ -929,12 +952,59 @@ impl Merger {
     }
 
     fn needs_join_field(
+        existing: Option<&FieldDefinition>,
+        new_field: &FieldDefinition,
         requires: Option<&str>,
         provides: Option<&str>,
         external: bool,
         overrides: Option<(&str, Option<&str>)>,
     ) -> bool {
-        requires.is_some() || provides.is_some() || external || overrides.is_some()
+        if requires.is_some() || provides.is_some() || external || overrides.is_some() {
+            return true;
+        }
+
+        let Some(existing_field) = existing else {
+            // We don't yet know if future subgraphs will define this field
+            return true;
+        };
+
+        if existing_field.ty != new_field.ty {
+            return true;
+        }
+
+        if existing_field.arguments.len() != new_field.arguments.len() {
+            return true;
+        }
+
+        for (old_arg, new_arg) in existing_field
+            .arguments
+            .iter()
+            .zip(new_field.arguments.iter())
+        {
+            if old_arg.name != new_arg.name
+                || old_arg.ty != new_arg.ty
+                || old_arg.default_value != new_arg.default_value
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn needs_join_input_field(
+        existing: Option<&InputValueDefinition>,
+        new_field: &InputValueDefinition,
+    ) -> bool {
+        match existing {
+            Some(existing_field)
+                if existing_field.ty == new_field.ty
+                    && existing_field.default_value == new_field.default_value =>
+            {
+                false
+            }
+            _ => true,
+        }
     }
 }
 
