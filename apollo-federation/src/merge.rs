@@ -479,10 +479,12 @@ impl Merger {
                     None,
                     Some(&field.ty),
                 );
-                supergraph_field
-                    .make_mut()
-                    .directives
-                    .push(Node::new(join_field_directive));
+                if Self::needs_join_field(None, None, false, None) {
+                    supergraph_field
+                        .make_mut()
+                        .directives
+                        .push(Node::new(join_field_directive));
+                }
             }
         } else {
             // TODO conflict on type
@@ -573,10 +575,12 @@ impl Merger {
                     Some(&field.ty),
                 );
 
-                supergraph_field
-                    .make_mut()
-                    .directives
-                    .push(Node::new(join_field_directive));
+                if Self::needs_join_field(None, None, false, None) {
+                    supergraph_field
+                        .make_mut()
+                        .directives
+                        .push(Node::new(join_field_directive));
+                }
             }
         } else {
             // TODO conflict on type
@@ -701,10 +705,17 @@ impl Merger {
                     Some(&field.ty),
                 );
 
-                supergraph_field
-                    .make_mut()
-                    .directives
-                    .push(Node::new(join_field_directive));
+                if Self::needs_join_field(
+                    requires_directive_option,
+                    provides_directive_option,
+                    external_field,
+                    overrides_directive_option,
+                ) {
+                    supergraph_field
+                        .make_mut()
+                        .directives
+                        .push(Node::new(join_field_directive));
+                }
 
                 // TODO: implement needsJoinField to avoid adding join__field when unnecessary
                 // https://github.com/apollographql/federation/blob/0d8a88585d901dff6844fdce1146a4539dec48df/composition-js/src/merging/merge.ts#L1648
@@ -802,10 +813,17 @@ impl Merger {
                     Some(&field.ty),
                 );
 
-                supergraph_field
-                    .make_mut()
-                    .directives
-                    .push(Node::new(join_field_directive));
+                if Self::needs_join_field(
+                    requires_directive_option,
+                    provides_directive_option,
+                    external_field,
+                    overrides_directive_option,
+                ) {
+                    supergraph_field
+                        .make_mut()
+                        .directives
+                        .push(Node::new(join_field_directive));
+                }
 
                 // TODO: implement needsJoinField to avoid adding join__field when unnecessary
                 // https://github.com/apollographql/federation/blob/0d8a88585d901dff6844fdce1146a4539dec48df/composition-js/src/merging/merge.ts#L1648
@@ -908,6 +926,15 @@ impl Merger {
                 .into(),
             );
         }
+    }
+
+    fn needs_join_field(
+        requires: Option<&str>,
+        provides: Option<&str>,
+        external: bool,
+        overrides: Option<(&str, Option<&str>)>,
+    ) -> bool {
+        requires.is_some() || provides.is_some() || external || overrides.is_some()
     }
 }
 
